@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "talent-matching"
+version = "0.1.0"
+description = "Talent Evaluation & Matchmaking System using Dagster"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Superteam Talent"}
+]
+
+dependencies = [
+    # Dagster core
+    "dagster>=1.6.0",
+    "dagster-webserver>=1.6.0",
+    "dagster-postgres>=0.22.0",
+    
+    # Database
+    "psycopg2-binary>=2.9.9",
+    "pgvector>=0.2.4",
+    "sqlalchemy>=2.0.0",
+    
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+# Future LLM integrations (not installed by default)
+llm = [
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "tiktoken>=0.5.0",
+]
+
+# CV parsing (not installed by default)
+parsing = [
+    "pypdf>=3.17.0",
+    "python-docx>=1.1.0",
+]
+
+[project.scripts]
+talent-matching = "talent_matching.definitions:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["talent_matching*"]
+
+[tool.dagster]
+module_name = "talent_matching.definitions"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

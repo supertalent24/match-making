@@ -1,0 +1,2 @@
+[console_scripts]
+talent-matching = talent_matching.definitions:main

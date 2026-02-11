@@ -1,0 +1,206 @@
+Metadata-Version: 2.4
+Name: talent-matching
+Version: 0.1.0
+Summary: Talent Evaluation & Matchmaking System using Dagster
+Author: Superteam Talent
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: dagster>=1.6.0
+Requires-Dist: dagster-webserver>=1.6.0
+Requires-Dist: dagster-postgres>=0.22.0
+Requires-Dist: psycopg2-binary>=2.9.9
+Requires-Dist: pgvector>=0.2.4
+Requires-Dist: sqlalchemy>=2.0.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: pydantic>=2.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.1.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+Requires-Dist: mypy>=1.7.0; extra == "dev"
+Provides-Extra: llm
+Requires-Dist: openai>=1.0.0; extra == "llm"
+Requires-Dist: anthropic>=0.18.0; extra == "llm"
+Requires-Dist: tiktoken>=0.5.0; extra == "llm"
+Provides-Extra: parsing
+Requires-Dist: pypdf>=3.17.0; extra == "parsing"
+Requires-Dist: python-docx>=1.1.0; extra == "parsing"
+
+# Talent Matching Pipeline
+
+A Dagster-based talent evaluation and matchmaking system for the Superteam Talent platform.
+
+## Overview
+
+This project implements an automated pipeline for:
+1. **Candidate ingestion** - Parse CVs, fetch GitHub data, collect application forms
+2. **LLM normalization** - Convert unstructured data into consistent, queryable profiles
+3. **Semantic embedding** - Generate vector representations for similarity search
+4. **Job matching** - Combine keyword matching with vector similarity for candidate ranking
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Dagster Pipeline                         │
+├─────────────────────────────────────────────────────────────────┤
+│  raw_candidates → normalized_candidates → candidate_vectors     │
+│  raw_jobs → normalized_jobs → job_vectors → matches             │
+├─────────────────────────────────────────────────────────────────┤
+│                          Resources                               │
+│  MockLLMResource | MockEmbeddingResource | GitHubAPIResource    │
+├─────────────────────────────────────────────────────────────────┤
+│                        Dual Storage                              │
+│  PostgreSQL (metrics) + pgvector (embeddings)                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- Docker and Docker Compose
+- (Optional) OpenAI API key for production LLM calls
+
+### 1. Start the Database
+
+```bash
+# Start PostgreSQL with pgvector extension
+docker-compose up -d
+
+# Verify it's running
+docker-compose ps
+```
+
+### 2. Install Dependencies
+
+```bash
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
+
+# Install the package in development mode
+pip install -e ".[dev]"
+```
+
+### 3. Configure Environment
+
+```bash
+# Copy the example environment file
+cp env.example .env
+
+# Edit .env with your settings (defaults work for local development)
+```
+
+### 4. Run Dagster
+
+```bash
+# Start the Dagster development server
+dagster dev
+
+# Open http://localhost:3000 in your browser
+```
+
+## Project Structure
+
+```
+talent_matching/
+├── definitions.py       # Dagster entry point
+├── assets/
+│   ├── candidates.py    # Candidate pipeline assets
+│   └── jobs.py          # Job pipeline and matching assets
+├── resources/
+│   ├── llm.py           # Mock/real LLM resource
+│   ├── embeddings.py    # Mock/real embedding resource
+│   └── github.py        # GitHub API resource
+└── io_managers/
+    ├── postgres.py      # PostgreSQL IO manager
+    └── pgvector.py      # pgvector IO manager
+```
+
+## Assets
+
+| Asset | Description |
+|-------|-------------|
+| `raw_candidates` | Ingested candidate data from CVs, GitHub, forms |
+| `normalized_candidates` | LLM-normalized structured profiles |
+| `candidate_vectors` | Semantic embeddings for candidates |
+| `raw_jobs` | Raw job descriptions |
+| `normalized_jobs` | LLM-normalized job requirements |
+| `job_vectors` | Semantic embeddings for jobs |
+| `matches` | Computed candidate-job matches with scores |
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_HOST` | `localhost` | PostgreSQL host |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port |
+| `POSTGRES_USER` | `talent` | Database user |
+| `POSTGRES_PASSWORD` | `talent_dev` | Database password |
+| `POSTGRES_DB` | `talent_matching` | Database name |
+| `ENVIRONMENT` | `development` | Environment (development/staging/production) |
+
+### LLM Configuration (Production)
+
+For production use with real LLM APIs:
+
+```bash
+# Install LLM dependencies
+pip install -e ".[llm]"
+
+# Set API keys
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+## Development
+
+### Running Tests
+
+```bash
+pytest tests/
+```
+
+### Code Quality
+
+```bash
+# Linting
+ruff check talent_matching/
+
+# Type checking
+mypy talent_matching/
+```
+
+## Matching Algorithm
+
+The matching system uses a hybrid approach:
+
+1. **Keyword Matching (40%)**: Exact/fuzzy skill matches
+   - Must-have skills: 60% weight
+   - Nice-to-have skills: 40% weight
+
+2. **Vector Similarity (60%)**: Semantic similarity across dimensions
+   - Best position match: 35%
+   - Overall experience fit: 25%
+   - Domain alignment: 25%
+   - Culture fit: 15%
+
+Final score: `(keyword_score × 0.4) + (vector_score × 0.6)`
+
+## Database Schema
+
+The system uses PostgreSQL with pgvector for dual storage:
+
+- **Structured metrics** (JSONB): Queryable fields for hard filters
+- **Vector embeddings** (vector): 1536-dim vectors for similarity search
+
+See `docker/init.sql` for the full schema.
+
+## License
+
+MIT
