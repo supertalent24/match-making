@@ -169,6 +169,12 @@ class NormalizedCandidate(Base):
     github_metrics: Mapped["CandidateGithubMetrics | None"] = relationship(
         "CandidateGithubMetrics", back_populates="candidate", uselist=False
     )
+    twitter_metrics: Mapped["CandidateTwitterMetrics | None"] = relationship(
+        "CandidateTwitterMetrics", back_populates="candidate", uselist=False
+    )
+    linkedin_metrics: Mapped["CandidateLinkedinMetrics | None"] = relationship(
+        "CandidateLinkedinMetrics", back_populates="candidate", uselist=False
+    )
 
 
 class CandidateSkill(Base):
@@ -473,6 +479,108 @@ class CandidateGithubMetrics(Base):
     # Relationships
     candidate: Mapped["NormalizedCandidate"] = relationship(
         "NormalizedCandidate", back_populates="github_metrics"
+    )
+
+
+class CandidateTwitterMetrics(Base):
+    """Basic Twitter/X metrics for a candidate.
+
+    Provides supplementary signal for BD/Marketing/Growth roles
+    and social presence scoring.
+    """
+
+    __tablename__ = "candidate_twitter_metrics"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", name="uq_candidate_twitter"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    airtable_record_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True
+    )
+
+    # Foreign key
+    candidate_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("normalized_candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Twitter/X profile
+    twitter_username: Mapped[str] = mapped_column(Text, nullable=False)
+    twitter_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Metrics (from X API v2 public_metrics)
+    followers_count: Mapped[int] = mapped_column(Integer, default=0)
+    following_count: Mapped[int] = mapped_column(Integer, default=0)
+    tweet_count: Mapped[int] = mapped_column(Integer, default=0)
+    listed_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Metadata
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    candidate: Mapped["NormalizedCandidate"] = relationship(
+        "NormalizedCandidate", back_populates="twitter_metrics"
+    )
+
+
+class CandidateLinkedinMetrics(Base):
+    """Basic LinkedIn metrics for a candidate.
+
+    Provides supplementary signal for professional network presence,
+    especially important for BD/Marketing/Growth roles.
+
+    Note: LinkedIn's official API is heavily restricted. Data is typically
+    obtained via third-party enrichment services (e.g., Proxycurl) or
+    manual entry during verification.
+    """
+
+    __tablename__ = "candidate_linkedin_metrics"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", name="uq_candidate_linkedin"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    airtable_record_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True
+    )
+
+    # Foreign key
+    candidate_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("normalized_candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # LinkedIn profile
+    linkedin_username: Mapped[str] = mapped_column(Text, nullable=False)
+    linkedin_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Metrics (from enrichment service or manual entry)
+    followers_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    connections_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    headline: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Data source tracking
+    source: Mapped[str] = mapped_column(
+        String(50), default="manual"
+    )  # 'proxycurl', 'manual', 'nubela', etc.
+
+    # Metadata
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    candidate: Mapped["NormalizedCandidate"] = relationship(
+        "NormalizedCandidate", back_populates="linkedin_metrics"
     )
 
 

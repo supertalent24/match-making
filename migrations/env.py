@@ -25,6 +25,9 @@ if config.config_file_name is not None:
 # Add your model's MetaData object here for 'autogenerate' support
 target_metadata = Base.metadata
 
+# Use custom version table to avoid conflicts with Dagster's alembic_version
+version_table = config.get_main_option("version_table", "alembic_version")
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -43,6 +46,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table=version_table,
     )
 
     with context.begin_transaction():
@@ -62,7 +66,11 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            version_table=version_table,
+        )
 
         with context.begin_transaction():
             context.run_migrations()

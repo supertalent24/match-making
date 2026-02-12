@@ -15,16 +15,18 @@ from dagster import (
     load_assets_from_modules,
 )
 
-from talent_matching.assets import candidates, jobs
+from talent_matching.assets import candidates, jobs, social
 from talent_matching.io_managers import PgVectorIOManager, PostgresMetricsIOManager
 from talent_matching.resources import (
     GitHubAPIResource,
+    LinkedInAPIResource,
     MockEmbeddingResource,
     MockLLMResource,
+    TwitterAPIResource,
 )
 
 # Load all assets from the modules
-all_assets = load_assets_from_modules([candidates, jobs])
+all_assets = load_assets_from_modules([candidates, jobs, social])
 
 
 def get_environment() -> str:
@@ -48,6 +50,14 @@ dev_resources = {
     # GitHub API resource
     "github": GitHubAPIResource(
         mock_mode=True,
+    ),
+    # Twitter/X API resource
+    "twitter_api": TwitterAPIResource(
+        mock_mode=True,
+    ),
+    # LinkedIn API resource
+    "linkedin_api": LinkedInAPIResource(
+        data_source="mock",
     ),
     # IO Managers for dual storage
     "postgres_io": PostgresMetricsIOManager(

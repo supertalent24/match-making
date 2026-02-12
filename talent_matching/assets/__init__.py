@@ -11,6 +11,11 @@ from talent_matching.assets.jobs import (
     normalized_jobs,
     raw_jobs,
 )
+from talent_matching.assets.social import (
+    candidate_linkedin_metrics,
+    candidate_twitter_metrics,
+    social_followers_aggregation,
+)
 
 __all__ = [
     # Candidate assets
@@ -21,6 +26,10 @@ __all__ = [
     "raw_jobs",
     "normalized_jobs",
     "job_vectors",
+    # Social metrics
+    "candidate_twitter_metrics",
+    "candidate_linkedin_metrics",
+    "social_followers_aggregation",
     # Matching
     "matches",
 ]
