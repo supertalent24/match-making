@@ -240,7 +240,7 @@ def normalized_candidates(
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
-    code_version="1.0.0",  # Bump when embedding logic changes
+    code_version="1.1.0",  # Bump when embedding logic changes
     op_tags={
         # Limit concurrent OpenRouter API calls to avoid rate limits
         # Shares concurrency pool with normalized_candidates
@@ -299,13 +299,19 @@ def candidate_vectors(
         " | ".join(experience_parts) if experience_parts else "No experience data"
     )
 
-    # Skills text: combine all skill categories
-    skills = normalized_json.get("skills", {})
-    skills_parts = []
-    for category, skill_list in skills.items():
-        if skill_list:
-            skills_parts.append(f"{category}: {', '.join(skill_list)}")
-    texts_to_embed["skills"] = " | ".join(skills_parts) if skills_parts else "No skills data"
+    # Skills text: skills is now a flat list
+    skills = normalized_json.get("skills", [])
+    if isinstance(skills, list) and skills:
+        texts_to_embed["skills"] = "Skills: " + ", ".join(skills)
+    elif isinstance(skills, dict):
+        # Backwards compatibility: handle old format with categories
+        skills_parts = []
+        for category, skill_list in skills.items():
+            if skill_list:
+                skills_parts.append(f"{category}: {', '.join(skill_list)}")
+        texts_to_embed["skills"] = " | ".join(skills_parts) if skills_parts else "No skills data"
+    else:
+        texts_to_embed["skills"] = "No skills data"
 
     # Summary text: professional summary + current role + domains
     summary_parts = []
@@ -315,8 +321,6 @@ def candidate_vectors(
         summary_parts.append(f"Current role: {normalized_json['current_role']}")
     if normalized_json.get("seniority_level"):
         summary_parts.append(f"Seniority: {normalized_json['seniority_level']}")
-    if skills.get("domains"):
-        summary_parts.append(f"Domains: {', '.join(skills['domains'])}")
     texts_to_embed["summary"] = " ".join(summary_parts) if summary_parts else "No summary data"
 
     context.log.info(f"Generating embeddings for candidate: {record_id}")
