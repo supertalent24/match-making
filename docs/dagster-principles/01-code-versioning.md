@@ -38,6 +38,8 @@ def normalized_candidates(raw_candidates):
     ...
 ```
 
+**Important**: Always use literal string versions (e.g., `"1.0.0"`) rather than variable references. This enables the pre-commit hook to verify versions are updated.
+
 **When to bump the version:**
 - Changed the LLM prompt template
 - Modified the normalization logic
@@ -48,6 +50,25 @@ def normalized_candidates(raw_candidates):
 - Added logging or comments
 - Fixed a bug that didn't affect output
 
+## Pre-commit Hook
+
+A pre-commit hook enforces that `code_version` is updated when asset code changes:
+
+```bash
+# Install pre-commit hooks
+pip install pre-commit
+pre-commit install
+
+# Run manually
+python scripts/check_dagster_code_versions.py --verbose
+```
+
+The hook will fail if you:
+1. Modify an asset's function body
+2. Without bumping the `code_version` string
+
+This prevents accidentally breaking staleness detection.
+
 ## Usage
 
 Instead of clicking **"Materialize all"**, use **"Materialize stale"** in the UI to only run assets that actually need updating.
@@ -57,7 +78,7 @@ Instead of clicking **"Materialize all"**, use **"Materialize stale"** in the UI
 | Approach | Pros | Cons |
 |----------|------|------|
 | Automatic detection | Zero config, always accurate | May over-trigger on refactors |
-| Explicit versions | Full control | Manual maintenance |
+| Explicit versions | Full control, pre-commit enforced | Manual maintenance |
 
 ## Related Concepts
 

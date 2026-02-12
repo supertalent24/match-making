@@ -17,26 +17,28 @@ from dagster import (
 )
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
-
 from talent_matching.assets import candidates, jobs, social
 from talent_matching.io_managers import PgVectorIOManager, PostgresMetricsIOManager
 from talent_matching.jobs import (
     candidate_ingest_job,
     candidate_pipeline_job,
+    full_pipeline_job,
     sample_candidates_job,
     sync_airtable_job,
+    test_pipeline_20_job,
 )
 from talent_matching.resources import (
     AirtableResource,
     GitHubAPIResource,
     LinkedInAPIResource,
     MockEmbeddingResource,
-    MockLLMResource,
+    OpenRouterResource,
     TwitterAPIResource,
 )
 from talent_matching.sensors.airtable_sensor import airtable_candidate_sensor
+
+# Load environment variables from .env file (must be before resource initialization)
+load_dotenv()
 
 # Load all assets from the modules
 all_assets = load_assets_from_modules([candidates, jobs, social])
@@ -55,10 +57,10 @@ dev_resources = {
         table_id=os.getenv("AIRTABLE_TABLE_ID", ""),
         api_key=os.getenv("AIRTABLE_API_KEY", ""),
     ),
-    # LLM resource for CV/job normalization and scoring
-    "llm": MockLLMResource(
-        model_version="mock-v1",
-        prompt_version="v1.0.0",
+    # OpenRouter LLM resource with cost tracking
+    "openrouter": OpenRouterResource(
+        api_key=os.getenv("OPENROUTER_API_KEY", ""),
+        default_model="openai/gpt-4o-mini",
     ),
     # Embedding resource for vector generation
     "embeddings": MockEmbeddingResource(
@@ -99,7 +101,7 @@ dev_resources = {
 def get_resources():
     """Get resources based on current environment."""
     env = get_environment()
-    
+
     if env == "production":
         # In production, we would return prod_resources
         # For now, use dev resources
@@ -117,6 +119,9 @@ all_jobs = [
     # Ops-based jobs (non-partitioned)
     sync_airtable_job,
     sample_candidates_job,
+    # Batch pipeline jobs
+    full_pipeline_job,
+    test_pipeline_20_job,
     # Asset jobs (partitioned)
     candidate_pipeline_job,
     candidate_ingest_job,

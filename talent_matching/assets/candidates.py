@@ -24,8 +24,6 @@ from dagster import (
 )
 
 from talent_matching.llm import normalize_cv
-from talent_matching.llm.operations.normalize_cv import PROMPT_VERSION as _CV_PROMPT_VERSION
-
 
 # Dynamic partition definition for candidates
 # Each candidate record gets its own partition key (Airtable record ID)
@@ -43,27 +41,26 @@ candidate_partitions = DynamicPartitionsDefinition(name="candidates")
 )
 def airtable_candidates(context: AssetExecutionContext) -> Output[dict[str, Any]]:
     """Fetch a single candidate from Airtable by partition key.
-    
+
     Each partition key corresponds to an Airtable record ID.
     The asset tracks data versions per record to enable change detection.
-    
+
     Returns:
         Output with the candidate data and a DataVersion for staleness tracking.
     """
     record_id = context.partition_key
     context.log.info(f"Fetching candidate record: {record_id}")
-    
+
     airtable = context.resources.airtable
     candidate = airtable.fetch_record_by_id(record_id)
-    
+
     # Extract data version for Dagster's change detection
     data_version = candidate.pop("_data_version", None)
-    
+
     context.log.info(
-        f"Fetched candidate: {candidate.get('full_name', 'Unknown')} "
-        f"(version: {data_version})"
+        f"Fetched candidate: {candidate.get('full_name', 'Unknown')} " f"(version: {data_version})"
     )
-    
+
     return Output(
         value=candidate,
         data_version=DataVersion(data_version) if data_version else None,
@@ -85,17 +82,17 @@ def raw_candidates(
     airtable_candidates: dict[str, Any],
 ) -> dict[str, Any]:
     """Store raw candidate data in PostgreSQL.
-    
+
     This asset receives candidate data from Airtable and prepares it
     for storage in the raw_candidates table. The postgres_io manager
     handles the actual database insertion/update.
-    
+
     The partition key (Airtable record ID) ensures each candidate
     is processed independently.
     """
     record_id = context.partition_key
     context.log.info(f"Storing raw candidate: {record_id}")
-    
+
     # The airtable_candidates data is already mapped to our model fields
     # Just pass it through to the IO manager
     raw_data = {
@@ -103,11 +100,11 @@ def raw_candidates(
         # Ensure required fields have defaults
         "source": airtable_candidates.get("source", "airtable"),
     }
-    
+
     context.log.info(
         f"Raw candidate data ready for storage: {raw_data.get('full_name', 'Unknown')}"
     )
-    
+
     return raw_data
 
 
@@ -118,7 +115,7 @@ def raw_candidates(
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
-    code_version="1.0.0",  # Bump when prompt or normalization logic changes
+    code_version="1.1.0",  # Bump when prompt or normalization logic changes
     metadata={
         "table": "normalized_candidates",
         "llm_operation": "normalize_cv",
@@ -182,11 +179,9 @@ def normalized_candidates(
                 "location": None,
                 "professional_summary": None,
             },
-            "prompt_version": _CV_PROMPT_VERSION,
-            "model_version": "skipped",
         }
 
-    context.log.info(f"Normalizing candidate: {record_id} via OpenRouter")
+    context.log.info(f"Normalizing candidate: {record_id} via OpenRouter API")
 
     # Check if OpenRouter API key is configured
     if not os.getenv("OPENROUTER_API_KEY"):
@@ -206,8 +201,6 @@ def normalized_candidates(
                 "location": raw_candidates.get("location_raw"),
                 "professional_summary": raw_candidates.get("professional_summary"),
             },
-            "prompt_version": _CV_PROMPT_VERSION,
-            "model_version": "mock-v1",
         }
 
     # Call the normalize_cv operation (prompt lives in talent_matching.llm.operations)
@@ -219,8 +212,6 @@ def normalized_candidates(
         "candidate_id": record_id,
         "airtable_record_id": raw_candidates.get("airtable_record_id"),
         "normalized_json": normalized_json,
-        "prompt_version": _CV_PROMPT_VERSION,
-        "model_version": "openai/gpt-4o-mini",
     }
 
 
@@ -240,28 +231,30 @@ def candidate_vectors(
     normalized_candidates: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Generate semantic embeddings for a candidate profile.
-    
+
     Generates multiple vector types:
     - experience: Concatenated experience across all roles
     - domain_context: Industries and problem spaces
     - personality: Work style and personality signals
-    
+
     For now, returns mock vector data.
     """
     record_id = context.partition_key
     context.log.info(f"Generating vectors for candidate: {record_id} (stub implementation)")
-    
+
     # Mock vector output (actual vectors would be 1536-dimensional)
     # TODO: Use embeddings resource for actual vector generation
     vectors = []
     for vector_type in ["experience", "domain_context", "personality"]:
-        vectors.append({
-            "candidate_id": record_id,
-            "airtable_record_id": normalized_candidates.get("airtable_record_id"),
-            "vector_type": vector_type,
-            "vector": [0.1] * 1536,  # Mock 1536-dim vector
-            "model_version": "mock-embedding-v1",
-        })
-    
+        vectors.append(
+            {
+                "candidate_id": record_id,
+                "airtable_record_id": normalized_candidates.get("airtable_record_id"),
+                "vector_type": vector_type,
+                "vector": [0.1] * 1536,  # Mock 1536-dim vector
+                "model_version": "mock-embedding-v1",
+            }
+        )
+
     context.log.info(f"Generated {len(vectors)} vectors for candidate: {record_id}")
     return vectors
