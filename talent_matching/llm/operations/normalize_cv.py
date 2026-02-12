@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = "1.1.0"  # v1.1.0: Extracted to modular LLM operations structure
+PROMPT_VERSION = (
+    "2.0.0"  # v2.0.0: Aligned with database schema, added contact info, education, hackathons
+)
 
 # Default model for CV normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -25,47 +27,74 @@ SYSTEM_PROMPT = """You are a CV parser. Extract and normalize the following CV i
 
 {
   "name": "Full name of the candidate",
-  "years_of_experience": <number or null if unclear>,
+  "email": "Email address or null",
+  "phone": "Phone number or null",
+  "years_of_experience": <total years as number or null>,
   "current_role": "Most recent job title",
   "summary": "2-3 sentence professional summary",
-  "skills": {
-    "languages": ["Programming languages..."],
-    "frameworks": ["Frameworks and libraries..."],
-    "tools": ["Tools, databases, platforms..."],
-    "domains": ["Industry domains and expertise areas..."]
-  },
-  "experience": [
-    {
-      "company": "Company name",
-      "role": "Job title",
-      "duration_months": <number or null>,
-      "description": "1-2 sentence summary of responsibilities",
-      "technologies": ["Tech used in this role..."]
-    }
-  ],
-  "education": [
-    {
-      "institution": "University/School name",
-      "degree": "Degree type and field",
-      "year": <graduation year or null>
-    }
-  ],
-  "notable_achievements": ["Hackathon wins, awards, significant projects..."],
+  "seniority_level": "JUNIOR|MID|SENIOR|STAFF|PRINCIPAL|null",
+
   "location": {
     "city": "City name or null",
     "country": "Country name or null",
     "timezone": "Timezone like 'America/New_York' or null"
   },
-  "social_handles": {
-    "github": "GitHub username or null",
-    "linkedin": "LinkedIn handle or null",
-    "twitter": "Twitter/X handle or null"
+
+  "skills": ["All skills mentioned: programming languages, frameworks, tools, databases, platforms, etc."],
+
+  "experience": [
+    {
+      "company": "Company name",
+      "role": "Job title",
+      "duration_months": <number or null>,
+      "is_current": <true if current job, false otherwise>,
+      "description": "Full description of responsibilities and achievements",
+      "technologies": ["Tech used in this role..."]
+    }
+  ],
+
+  "education": {
+    "highest_degree": "Highest degree (e.g., 'Bachelor's', 'Master's', 'PhD') or null",
+    "field": "Field of study (e.g., 'Computer Science') or null",
+    "institution": "Name of university/college or null"
   },
-  "seniority_level": "junior|mid|senior|staff|principal|null"
+
+  "projects": [
+    {
+      "name": "Project name",
+      "description": "What the project does",
+      "technologies": ["Tech stack used..."],
+      "url": "Project URL or null"
+    }
+  ],
+
+  "hackathons": [
+    {
+      "name": "Hackathon name",
+      "prize": "Prize won (e.g., '1st Place', 'Best DeFi') or null",
+      "prize_amount_usd": <prize in USD as number or null>,
+      "is_solana": <true if Solana/Solana Foundation hackathon>
+    }
+  ],
+
+  "achievements": ["Other awards, certifications, notable accomplishments..."],
+
+  "social_handles": {
+    "github": "GitHub username only (not full URL) or null",
+    "linkedin": "LinkedIn handle only (not full URL) or null",
+    "twitter": "Twitter/X handle only (not full URL) or null"
+  },
+
+  "verified_communities": ["Any crypto/tech communities they are verified members of..."]
 }
 
-Be factual. If information is missing, use null. Do not make up information.
-Infer seniority_level from job titles and years of experience when possible."""
+IMPORTANT:
+- Extract email and phone if present in the CV
+- skills is a FLAT LIST of all skills (languages, frameworks, tools, etc.)
+- For social handles, extract just the username (e.g., "darshan9solanki" not "https://x.com/darshan9solanki")
+- Separate hackathons from general projects - hackathons have prizes/competitions
+- seniority_level must be uppercase: JUNIOR, MID, SENIOR, STAFF, or PRINCIPAL
+- Be factual. If information is missing, use null. Do not make up information."""
 
 
 class NormalizeCVResult:

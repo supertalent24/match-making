@@ -1,53 +1,155 @@
-"""PostgreSQL IO Manager for storing structured candidate and job metrics.
+"""PostgreSQL IO Manager using SQLAlchemy ORM.
 
-This IO manager handles the storage and retrieval of normalized profiles,
-raw data, and other queryable metrics in PostgreSQL using JSONB columns.
+This IO manager handles the storage and retrieval of candidate and job data
+using SQLAlchemy models for type safety and consistency.
 """
 
 import json
-import os
-import uuid
-from datetime import datetime
 from typing import Any
+from uuid import UUID, uuid4
 
-import psycopg2
-from dagster import (
-    ConfigurableIOManager,
-    InputContext,
-    OutputContext,
-)
+from dagster import ConfigurableIOManager, InputContext, OutputContext
 from pydantic import Field
+from sqlalchemy import create_engine, delete, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session, sessionmaker
+
+from talent_matching.models import (
+    Match,
+    NormalizedCandidate,
+    NormalizedJob,
+    ProcessingStatusEnum,
+    RawCandidate,
+    RawJob,
+)
+from talent_matching.models.candidates import (
+    CandidateExperience,
+    CandidateProject,
+    CandidateSkill,
+)
+from talent_matching.models.skills import ReviewStatusEnum, Skill
+
+
+def _serialize_for_text(value: Any) -> str | None:
+    """Serialize complex types (list, dict) to JSON string for Text columns.
+
+    Args:
+        value: The value to serialize
+
+    Returns:
+        JSON string if value is list/dict, string if already string, None if None
+    """
+    if value is None:
+        return None
+    if isinstance(value, list | dict):
+        return json.dumps(value)
+    return str(value)
 
 
 class PostgresMetricsIOManager(ConfigurableIOManager):
-    """IO Manager for storing structured data in PostgreSQL.
-    
+    """IO Manager for storing structured data in PostgreSQL using SQLAlchemy ORM.
+
     Handles the following asset types:
     - raw_candidates: Raw ingested candidate data
     - normalized_candidates: LLM-normalized candidate profiles
     - raw_jobs: Raw job descriptions
     - normalized_jobs: LLM-normalized job requirements
     - matches: Computed match results
-    
-    Data is stored in JSONB columns for flexible schema evolution,
-    with versioning metadata for prompt and model tracking.
+
+    Uses SQLAlchemy ORM for type safety and automatic schema validation.
     """
 
-    host: str = Field(default_factory=lambda: os.getenv("POSTGRES_HOST", "localhost"))
-    port: int = Field(default_factory=lambda: int(os.getenv("POSTGRES_PORT", "5432")))
-    user: str = Field(default_factory=lambda: os.getenv("POSTGRES_USER", "talent"))
-    password: str = Field(default_factory=lambda: os.getenv("POSTGRES_PASSWORD", "talent_dev"))
-    database: str = Field(default_factory=lambda: os.getenv("POSTGRES_DB", "talent_matching"))
+    host: str = Field(description="PostgreSQL host")
+    port: int = Field(description="PostgreSQL port")
+    user: str = Field(description="PostgreSQL user")
+    password: str = Field(description="PostgreSQL password")
+    database: str = Field(description="PostgreSQL database name")
 
-    def _get_connection(self):
-        """Create a database connection."""
-        return psycopg2.connect(
-            host=self.host,
-            port=self.port,
-            user=self.user,
-            password=self.password,
-            dbname=self.database,
+    _engine: Any = None
+    _session_factory: Any = None
+
+    def _get_engine(self):
+        """Create or return cached SQLAlchemy engine."""
+        if self._engine is None:
+            url = (
+                f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+            )
+            self._engine = create_engine(url, pool_pre_ping=True)
+            self._session_factory = sessionmaker(bind=self._engine)
+        return self._engine
+
+    def _get_session(self) -> Session:
+        """Create a new database session."""
+        self._get_engine()
+        return self._session_factory()
+
+    def _extract_handle_from_url(self, url: str, domain: str) -> str | None:
+        """Extract username/handle from a social media URL.
+
+        Args:
+            url: Full URL like https://github.com/username/
+            domain: Domain to match like 'github.com' or 'linkedin.com/in'
+
+        Returns:
+            Username/handle extracted from URL, or None if not found
+        """
+        if not url or domain not in url:
+            return None
+        # Find the part after the domain
+        parts = url.split(domain)
+        if len(parts) < 2:
+            return None
+        # Get the path after the domain, strip slashes
+        path = parts[1].strip("/")
+        # Get the first segment (username)
+        if "/" in path:
+            return path.split("/")[0]
+        return path if path else None
+
+    def _parse_salary_range(self, salary_raw: str | None) -> tuple[int | None, int | None, str]:
+        """Parse salary range string into min, max, and currency.
+
+        Handles formats like:
+        - "$15,000 - $60,000"
+        - "15000-60000"
+        - "$50k - $80k"
+        - "€40,000 - €60,000"
+
+        Args:
+            salary_raw: Raw salary string from Airtable
+
+        Returns:
+            Tuple of (min_salary, max_salary, currency)
+        """
+        import re
+
+        if not salary_raw:
+            return None, None, "USD"
+
+        # Detect currency
+        currency = "USD"
+        if "€" in salary_raw:
+            currency = "EUR"
+        elif "£" in salary_raw:
+            currency = "GBP"
+
+        # Remove currency symbols and commas, normalize
+        cleaned = re.sub(r"[$€£,]", "", salary_raw)
+
+        # Handle "k" notation (e.g., "50k")
+        cleaned = re.sub(
+            r"(\d+)k", lambda m: str(int(m.group(1)) * 1000), cleaned, flags=re.IGNORECASE
         )
+
+        # Find all numbers
+        numbers = re.findall(r"\d+", cleaned)
+
+        if len(numbers) >= 2:
+            return int(numbers[0]), int(numbers[1]), currency
+        elif len(numbers) == 1:
+            return int(numbers[0]), int(numbers[0]), currency
+
+        return None, None, currency
 
     def _get_table_name(self, context: OutputContext | InputContext) -> str:
         """Derive table name from asset key."""
@@ -57,202 +159,679 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         return "unknown"
 
     def handle_output(self, context: OutputContext, obj: Any) -> None:
-        """Store output data in PostgreSQL.
-        
+        """Store output data in PostgreSQL using SQLAlchemy ORM.
+
         Args:
             context: Dagster output context with asset metadata
-            obj: Data to store (dict, list of dicts, or other serializable data)
+            obj: Data to store (dict or list of dicts)
         """
         table_name = self._get_table_name(context)
-        
-        # Handle different asset types
+
         if table_name == "raw_candidates":
-            self._store_raw_candidates(obj)
+            self._store_raw_candidate(context, obj)
         elif table_name == "normalized_candidates":
-            self._store_normalized_candidates(obj)
+            self._store_normalized_candidate(context, obj)
         elif table_name == "raw_jobs":
-            self._store_raw_jobs(obj)
+            self._store_raw_job(context, obj)
         elif table_name == "normalized_jobs":
-            self._store_normalized_jobs(obj)
+            self._store_normalized_job(context, obj)
         elif table_name == "matches":
-            self._store_matches(obj)
+            self._store_match(context, obj)
         else:
-            # Generic storage for unknown asset types
-            self._store_generic(table_name, obj)
+            context.log.warning(f"Unknown asset type: {table_name}")
 
         context.log.info(f"Stored data to table: {table_name}")
 
     def load_input(self, context: InputContext) -> Any:
-        """Load data from PostgreSQL.
-        
+        """Load data from PostgreSQL using SQLAlchemy ORM.
+
         Args:
             context: Dagster input context with asset metadata
-            
+
         Returns:
-            Retrieved data from the database
+            Retrieved data from the database (single dict for partitioned, list for non-partitioned)
         """
         table_name = self._get_table_name(context)
-        
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        # Load all records from the table
-        # In production, you'd want pagination or filtering
-        query = f"SELECT * FROM {table_name} ORDER BY created_at DESC LIMIT 1000"
-        cursor.execute(query)
-        
-        columns = [desc[0] for desc in cursor.description]
-        rows = cursor.fetchall()
-        
-        cursor.close()
-        conn.close()
-        
-        # Convert to list of dicts
-        result = []
-        for row in rows:
-            record = dict(zip(columns, row))
-            # Parse JSONB columns
-            for key, value in record.items():
-                if isinstance(value, str) and value.startswith("{"):
-                    record[key] = json.loads(value)
-            result.append(record)
-        
-        context.log.info(f"Loaded {len(result)} records from table: {table_name}")
+        session = self._get_session()
+
+        model_map = {
+            "raw_candidates": RawCandidate,
+            "normalized_candidates": NormalizedCandidate,
+            "raw_jobs": RawJob,
+            "normalized_jobs": NormalizedJob,
+            "matches": Match,
+        }
+
+        model = model_map.get(table_name)
+        if not model:
+            context.log.warning(f"Unknown table for load: {table_name}")
+            session.close()
+            return None
+
+        # For partitioned assets, load by partition key
+        partition_key = context.partition_key if hasattr(context, "partition_key") else None
+
+        if partition_key:
+            # Partitioned asset - return single record by airtable_record_id
+            if hasattr(model, "airtable_record_id"):
+                stmt = select(model).where(model.airtable_record_id == partition_key)
+            else:
+                context.log.warning(f"Model {model.__name__} has no airtable_record_id column")
+                session.close()
+                return None
+
+            result = session.execute(stmt).scalar_one_or_none()
+            session.close()
+
+            if result:
+                return self._model_to_dict(result)
+            return None
+        else:
+            # Non-partitioned - load all records (with limit for safety)
+            stmt = select(model).limit(1000)
+            results = session.execute(stmt).scalars().all()
+            session.close()
+            return [self._model_to_dict(r) for r in results]
+
+    def _model_to_dict(self, model_instance: Any) -> dict[str, Any]:
+        """Convert SQLAlchemy model instance to dictionary."""
+        result = {}
+        for column in model_instance.__table__.columns:
+            value = getattr(model_instance, column.name)
+            # Convert UUID to string for JSON compatibility
+            if isinstance(value, UUID):
+                value = str(value)
+            result[column.name] = value
         return result
 
-    def _store_raw_candidates(self, data: list[dict[str, Any]]) -> None:
-        """Store raw candidate data."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        for record in data if isinstance(data, list) else [data]:
-            cursor.execute(
-                """
-                INSERT INTO raw_candidates (id, source, raw_data, ingested_at)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET raw_data = EXCLUDED.raw_data
-                """,
-                (
-                    record.get("id", str(uuid.uuid4())),
-                    record.get("source", "unknown"),
-                    json.dumps(record.get("raw_data", record)),
-                    datetime.now(),
-                ),
-            )
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
+    def _store_raw_candidate(self, context: OutputContext, data: dict[str, Any]) -> None:
+        """Store raw candidate data using SQLAlchemy ORM with upsert."""
+        session = self._get_session()
 
-    def _store_normalized_candidates(self, data: list[dict[str, Any]]) -> None:
-        """Store normalized candidate profiles."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        for record in data if isinstance(data, list) else [data]:
-            cursor.execute(
-                """
-                INSERT INTO normalized_candidates 
-                (id, candidate_id, normalized_json, prompt_version, model_version, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    record.get("candidate_id"),
-                    json.dumps(record.get("normalized_json", record)),
-                    record.get("prompt_version", "v1.0.0"),
-                    record.get("model_version", "mock-v1"),
-                    datetime.now(),
-                ),
-            )
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
+        # Get partition key (Airtable record ID)
+        partition_key = context.partition_key
 
-    def _store_raw_jobs(self, data: list[dict[str, Any]]) -> None:
-        """Store raw job descriptions."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        for record in data if isinstance(data, list) else [data]:
-            cursor.execute(
-                """
-                INSERT INTO raw_jobs (id, company_id, raw_description, ingested_at)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET raw_description = EXCLUDED.raw_description
-                """,
-                (
-                    record.get("id", str(uuid.uuid4())),
-                    record.get("company_id"),
-                    record.get("raw_description", ""),
-                    datetime.now(),
-                ),
-            )
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
+        # Map the incoming data to model fields
+        # Serialize complex types (lists, dicts) to JSON strings for Text columns
+        values = {
+            "airtable_record_id": partition_key,
+            "source": data.get("source", "airtable"),
+            "source_id": data.get("source_id") or partition_key,
+            "full_name": data.get("full_name", "Unknown"),
+            "location_raw": _serialize_for_text(data.get("location_raw")),
+            "desired_job_categories_raw": _serialize_for_text(
+                data.get("desired_job_categories_raw")
+            ),
+            "skills_raw": _serialize_for_text(data.get("skills_raw")),
+            "cv_url": _serialize_for_text(data.get("cv_url")),
+            "cv_text": _serialize_for_text(data.get("cv_text")),
+            "professional_summary": _serialize_for_text(data.get("professional_summary")),
+            "proof_of_work": _serialize_for_text(data.get("proof_of_work")),
+            "salary_range_raw": _serialize_for_text(data.get("salary_range_raw")),
+            "x_profile_url": _serialize_for_text(data.get("x_profile_url")),
+            "linkedin_url": _serialize_for_text(data.get("linkedin_url")),
+            "earn_profile_url": _serialize_for_text(data.get("earn_profile_url")),
+            "github_url": _serialize_for_text(data.get("github_url")),
+            "work_experience_raw": _serialize_for_text(data.get("work_experience_raw")),
+            "processing_status": ProcessingStatusEnum.PENDING,
+        }
 
-    def _store_normalized_jobs(self, data: list[dict[str, Any]]) -> None:
-        """Store normalized job requirements."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        for record in data if isinstance(data, list) else [data]:
-            cursor.execute(
-                """
-                INSERT INTO normalized_jobs 
-                (id, job_id, normalized_json, prompt_version, model_version, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    record.get("job_id"),
-                    json.dumps(record.get("normalized_json", record)),
-                    record.get("prompt_version", "v1.0.0"),
-                    record.get("model_version", "mock-v1"),
-                    datetime.now(),
-                ),
-            )
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
+        # Use PostgreSQL upsert (INSERT ... ON CONFLICT DO UPDATE)
+        stmt = insert(RawCandidate).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["airtable_record_id"],
+            set_={
+                "source": stmt.excluded.source,
+                "full_name": stmt.excluded.full_name,
+                "location_raw": stmt.excluded.location_raw,
+                "desired_job_categories_raw": stmt.excluded.desired_job_categories_raw,
+                "skills_raw": stmt.excluded.skills_raw,
+                "cv_url": stmt.excluded.cv_url,
+                "cv_text": stmt.excluded.cv_text,
+                "professional_summary": stmt.excluded.professional_summary,
+                "proof_of_work": stmt.excluded.proof_of_work,
+                "salary_range_raw": stmt.excluded.salary_range_raw,
+                "x_profile_url": stmt.excluded.x_profile_url,
+                "linkedin_url": stmt.excluded.linkedin_url,
+                "earn_profile_url": stmt.excluded.earn_profile_url,
+                "github_url": stmt.excluded.github_url,
+                "work_experience_raw": stmt.excluded.work_experience_raw,
+            },
+        )
 
-    def _store_matches(self, data: list[dict[str, Any]]) -> None:
-        """Store match results."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        for record in data if isinstance(data, list) else [data]:
-            cursor.execute(
-                """
-                INSERT INTO matches 
-                (id, job_id, candidate_id, match_score, keyword_score, vector_score, breakdown_json, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (job_id, candidate_id) DO UPDATE SET 
-                    match_score = EXCLUDED.match_score,
-                    breakdown_json = EXCLUDED.breakdown_json
-                """,
-                (
-                    str(uuid.uuid4()),
-                    record.get("job_id"),
-                    record.get("candidate_id"),
-                    record.get("match_score", 0.0),
-                    record.get("keyword_score"),
-                    record.get("vector_score"),
-                    json.dumps(record.get("breakdown", {})),
-                    datetime.now(),
-                ),
-            )
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
+        session.execute(stmt)
+        session.commit()
+        session.close()
 
-    def _store_generic(self, table_name: str, data: Any) -> None:
-        """Generic storage for unknown asset types."""
-        # For now, just log that we don't handle this type
-        # In production, you might create a generic key-value table
-        pass
+        context.log.info(f"Upserted raw candidate: {partition_key}")
+
+    def _store_normalized_candidate(self, context: OutputContext, data: dict[str, Any]) -> None:
+        """Store normalized candidate data using SQLAlchemy ORM."""
+        session = self._get_session()
+        partition_key = context.partition_key
+
+        # First, get the raw candidate ID
+        raw_candidate = session.execute(
+            select(RawCandidate).where(RawCandidate.airtable_record_id == partition_key)
+        ).scalar_one_or_none()
+
+        if not raw_candidate:
+            context.log.error(f"Raw candidate not found for: {partition_key}")
+            session.close()
+            return
+
+        # The asset returns {"normalized_json": {...}, "model_version": "..."}
+        # Extract the LLM-normalized data from the nested structure
+        normalized_json = data.get("normalized_json", {})
+
+        # Skills is now a flat list
+        skills = normalized_json.get("skills", [])
+        skills_list = skills if isinstance(skills, list) else []
+
+        # Extract location fields from nested structure
+        location = normalized_json.get("location", {})
+        if isinstance(location, dict):
+            location_city = location.get("city")
+            location_country = location.get("country")
+            timezone = location.get("timezone")
+        else:
+            location_city = None
+            location_country = str(location) if location else None
+            timezone = None
+
+        # Extract social handles from LLM response
+        social_handles = normalized_json.get("social_handles", {})
+        github_handle = social_handles.get("github") if isinstance(social_handles, dict) else None
+        linkedin_handle = (
+            social_handles.get("linkedin") if isinstance(social_handles, dict) else None
+        )
+        x_handle = social_handles.get("twitter") if isinstance(social_handles, dict) else None
+
+        # Fallback: Extract handles from raw candidate URLs if LLM didn't provide them
+        if not github_handle and raw_candidate.github_url:
+            github_handle = self._extract_handle_from_url(raw_candidate.github_url, "github.com")
+        if not linkedin_handle and raw_candidate.linkedin_url:
+            linkedin_handle = self._extract_handle_from_url(
+                raw_candidate.linkedin_url, "linkedin.com/in"
+            )
+        if not x_handle and raw_candidate.x_profile_url:
+            x_handle = self._extract_handle_from_url(
+                raw_candidate.x_profile_url, "x.com"
+            ) or self._extract_handle_from_url(raw_candidate.x_profile_url, "twitter.com")
+
+        # Parse salary range from raw data
+        compensation_min, compensation_max, compensation_currency = self._parse_salary_range(
+            raw_candidate.salary_range_raw
+        )
+
+        # Extract experience data and compute metrics
+        experience = normalized_json.get("experience", [])
+        if isinstance(experience, list):
+            companies = [exp.get("company") for exp in experience if exp.get("company")]
+            job_count = len(experience)
+            durations = [
+                exp.get("duration_months") for exp in experience if exp.get("duration_months")
+            ]
+            average_tenure_months = int(sum(durations) / len(durations)) if durations else None
+            longest_tenure_months = max(durations) if durations else None
+        else:
+            companies = []
+            job_count = None
+            average_tenure_months = None
+            longest_tenure_months = None
+
+        # Extract education (now a flat object)
+        education = normalized_json.get("education", {})
+        if isinstance(education, dict):
+            education_highest_degree = education.get("highest_degree")
+            education_field = education.get("field")
+            education_institution = education.get("institution")
+        else:
+            education_highest_degree = None
+            education_field = None
+            education_institution = None
+
+        # Extract hackathon stats
+        hackathons = normalized_json.get("hackathons", [])
+        hackathon_wins_count = len(hackathons) if isinstance(hackathons, list) else 0
+        hackathon_total_prize_usd = (
+            sum(h.get("prize_amount_usd", 0) or 0 for h in hackathons)
+            if isinstance(hackathons, list)
+            else 0
+        )
+        solana_hackathon_wins = (
+            sum(1 for h in hackathons if h.get("is_solana")) if isinstance(hackathons, list) else 0
+        )
+
+        # Combine achievements and hackathon names for notable_achievements
+        achievements = normalized_json.get("achievements", [])
+        hackathon_names = (
+            [h.get("name") for h in hackathons if h.get("name")]
+            if isinstance(hackathons, list)
+            else []
+        )
+        notable_achievements = (
+            achievements if isinstance(achievements, list) else []
+        ) + hackathon_names
+
+        # Extract verified communities
+        verified_communities = normalized_json.get("verified_communities", [])
+        verified_communities = (
+            verified_communities if isinstance(verified_communities, list) else []
+        )
+
+        # Map data to NormalizedCandidate model fields
+        values = {
+            "airtable_record_id": partition_key,
+            "raw_candidate_id": raw_candidate.id,
+            "full_name": normalized_json.get("name", "Unknown"),
+            "email": normalized_json.get("email"),
+            "phone": normalized_json.get("phone"),
+            "location_city": location_city,
+            "location_country": location_country,
+            "location_region": None,
+            "timezone": timezone,
+            "professional_summary": normalized_json.get("summary"),
+            "current_role": normalized_json.get("current_role"),
+            "seniority_level": normalized_json.get("seniority_level"),
+            "years_of_experience": normalized_json.get("years_of_experience"),
+            "desired_job_categories": None,  # From raw data, not LLM
+            "skills_summary": skills_list if skills_list else None,
+            "companies_summary": companies if companies else None,
+            "notable_achievements": notable_achievements if notable_achievements else None,
+            "verified_communities": verified_communities if verified_communities else None,
+            "compensation_min": compensation_min,
+            "compensation_max": compensation_max,
+            "compensation_currency": compensation_currency,
+            "job_count": job_count,
+            "job_switches_count": job_count - 1 if job_count and job_count > 0 else None,
+            "average_tenure_months": average_tenure_months,
+            "longest_tenure_months": longest_tenure_months,
+            "education_highest_degree": education_highest_degree,
+            "education_field": education_field,
+            "education_institution": education_institution,
+            "hackathon_wins_count": hackathon_wins_count,
+            "hackathon_total_prize_usd": hackathon_total_prize_usd,
+            "solana_hackathon_wins": solana_hackathon_wins,
+            "x_handle": x_handle,
+            "linkedin_handle": linkedin_handle,
+            "github_handle": github_handle,
+            "prompt_version": data.get("prompt_version"),
+            "model_version": data.get("model_version"),
+            "confidence_score": normalized_json.get("confidence_score"),
+        }
+
+        # Upsert normalized candidate
+        stmt = insert(NormalizedCandidate).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["airtable_record_id"],
+            set_={k: getattr(stmt.excluded, k) for k in values.keys() if k != "airtable_record_id"},
+        )
+
+        session.execute(stmt)
+        session.commit()
+
+        # Get the normalized candidate ID for related tables
+        normalized_candidate = session.execute(
+            select(NormalizedCandidate).where(
+                NormalizedCandidate.airtable_record_id == partition_key
+            )
+        ).scalar_one()
+        normalized_id = normalized_candidate.id
+
+        # Store related data from LLM response
+        self._store_candidate_experiences(
+            session, normalized_id, partition_key, experience, context
+        )
+        self._store_candidate_skills(
+            session, normalized_id, partition_key, skills, data.get("model_version"), context
+        )
+        # Store projects from LLM response
+        projects = normalized_json.get("projects", [])
+        self._store_candidate_projects(
+            session, normalized_id, partition_key, projects, hackathons, context
+        )
+
+        # Update raw candidate processing status
+        raw_candidate.processing_status = ProcessingStatusEnum.COMPLETED
+        session.commit()
+        session.close()
+
+        context.log.info(f"Upserted normalized candidate with related data: {partition_key}")
+
+    def _store_candidate_experiences(
+        self,
+        session: Session,
+        candidate_id: Any,
+        partition_key: str,
+        experiences: list[dict[str, Any]],
+        context: OutputContext,
+    ) -> None:
+        """Store work experience entries from LLM response.
+
+        LLM returns experience as:
+        [{"company": "...", "role": "...", "duration_months": ..., "description": "...", "technologies": [...]}]
+        """
+        if not experiences or not isinstance(experiences, list):
+            return
+
+        # Delete existing experiences for this candidate (replace strategy)
+        session.execute(
+            delete(CandidateExperience).where(CandidateExperience.candidate_id == candidate_id)
+        )
+
+        for order, exp in enumerate(experiences, 1):
+            if not exp.get("company") or not exp.get("role"):
+                continue
+
+            # Calculate years_experience from duration_months
+            duration_months = exp.get("duration_months")
+            years_exp = duration_months / 12.0 if duration_months else None
+
+            values = {
+                "id": uuid4(),
+                "airtable_record_id": f"{partition_key}_exp_{order}",
+                "candidate_id": candidate_id,
+                "company_name": exp.get("company"),
+                "position_title": exp.get("role"),
+                "years_experience": years_exp,
+                "is_current": exp.get("is_current", False),  # Use LLM-provided field
+                "description": exp.get("description"),
+                "skills_used": exp.get("technologies"),
+                "position_order": order,
+            }
+
+            stmt = insert(CandidateExperience).values(**values)
+            session.execute(stmt)
+
+        session.commit()
+        context.log.info(f"Stored {len(experiences)} work experiences for {partition_key}")
+
+    def _store_candidate_skills(
+        self,
+        session: Session,
+        candidate_id: Any,
+        partition_key: str,
+        skills: Any,
+        model_version: str | None,
+        context: OutputContext,
+    ) -> None:
+        """Store skills from LLM response, creating skill entries as needed.
+
+        LLM returns skills as a flat list: ["Python", "React", "PostgreSQL", ...]
+        """
+        if not skills or not isinstance(skills, list):
+            return
+
+        # Delete existing skill associations for this candidate (replace strategy)
+        session.execute(delete(CandidateSkill).where(CandidateSkill.candidate_id == candidate_id))
+
+        skills_stored = 0
+        for skill_name in skills:
+            if not skill_name or not isinstance(skill_name, str):
+                continue
+
+            # Get or create the skill in the skills table
+            skill_id = self._get_or_create_skill(session, skill_name)
+            if not skill_id:
+                continue
+
+            values = {
+                "id": uuid4(),
+                "airtable_record_id": f"{partition_key}_skill_{hash(skill_name) % 10000:04d}",
+                "candidate_id": candidate_id,
+                "skill_id": skill_id,
+                "rating": 3,  # Default mid-range rating
+                "rating_model": model_version,
+            }
+
+            stmt = insert(CandidateSkill).values(**values)
+            stmt = stmt.on_conflict_do_nothing()  # Skip duplicates
+            session.execute(stmt)
+            skills_stored += 1
+
+        session.commit()
+        context.log.info(f"Stored {skills_stored} skills for {partition_key}")
+
+    def _get_or_create_skill(self, session: Session, skill_name: str) -> Any:
+        """Get existing skill ID or create a new one."""
+        # Normalize skill name for slug (limited to 100 chars by database schema)
+        slug = skill_name.lower().strip().replace(" ", "-").replace(".", "")
+        if len(slug) > 100:
+            slug = slug[:100]  # Database column is String(100)
+
+        # Try to find existing skill by name (case-insensitive) or slug
+        existing = session.execute(
+            select(Skill).where((Skill.slug == slug) | (Skill.name.ilike(skill_name)))
+        ).scalar_one_or_none()
+
+        if existing:
+            return existing.id
+
+        # Create new skill
+        new_skill = Skill(
+            id=uuid4(),
+            name=skill_name.strip(),
+            slug=slug,
+            created_by="llm",
+            is_active=True,
+            review_status=ReviewStatusEnum.PENDING,
+        )
+
+        try:
+            session.add(new_skill)
+            session.flush()
+            return new_skill.id
+        except Exception:
+            session.rollback()
+            # Might have been created by another process, try to fetch again
+            existing = session.execute(select(Skill).where(Skill.slug == slug)).scalar_one_or_none()
+            return existing.id if existing else None
+
+    def _store_candidate_projects(
+        self,
+        session: Session,
+        candidate_id: Any,
+        partition_key: str,
+        projects: list[dict[str, Any]],
+        hackathons: list[dict[str, Any]],
+        context: OutputContext,
+    ) -> None:
+        """Store projects and hackathons from LLM response.
+
+        LLM returns:
+        - projects: [{"name": "...", "description": "...", "technologies": [...], "url": "..."}]
+        - hackathons: [{"name": "...", "prize": "...", "prize_amount_usd": ..., "is_solana": bool}]
+        """
+        # Delete existing projects for this candidate (replace strategy)
+        session.execute(
+            delete(CandidateProject).where(CandidateProject.candidate_id == candidate_id)
+        )
+
+        projects_stored = 0
+        order = 0
+
+        # Store regular projects
+        if isinstance(projects, list):
+            for proj in projects:
+                if not proj.get("name"):
+                    continue
+
+                order += 1
+                values = {
+                    "id": uuid4(),
+                    "airtable_record_id": f"{partition_key}_proj_{order}",
+                    "candidate_id": candidate_id,
+                    "project_name": proj.get("name"),
+                    "description": proj.get("description"),
+                    "technologies": proj.get("technologies")
+                    if isinstance(proj.get("technologies"), list)
+                    else None,
+                    "url": proj.get("url"),
+                    "is_hackathon": False,
+                    "project_order": order,
+                }
+
+                stmt = insert(CandidateProject).values(**values)
+                session.execute(stmt)
+                projects_stored += 1
+
+        # Store hackathons as projects with is_hackathon=True
+        if isinstance(hackathons, list):
+            for hackathon in hackathons:
+                if not hackathon.get("name"):
+                    continue
+
+                order += 1
+                # Build description from hackathon data
+                description_parts = []
+                if hackathon.get("prize"):
+                    description_parts.append(f"Prize: {hackathon.get('prize')}")
+                if hackathon.get("prize_amount_usd"):
+                    description_parts.append(f"${hackathon.get('prize_amount_usd')} USD")
+                if hackathon.get("is_solana"):
+                    description_parts.append("Solana Hackathon")
+                description = " | ".join(description_parts) if description_parts else None
+
+                values = {
+                    "id": uuid4(),
+                    "airtable_record_id": f"{partition_key}_hack_{order}",
+                    "candidate_id": candidate_id,
+                    "project_name": hackathon.get("name"),
+                    "hackathon_name": hackathon.get("name"),
+                    "description": description,
+                    "is_hackathon": True,
+                    "prize_won": hackathon.get("prize"),
+                    "prize_amount_usd": hackathon.get("prize_amount_usd"),
+                    "project_order": order,
+                }
+
+                stmt = insert(CandidateProject).values(**values)
+                session.execute(stmt)
+                projects_stored += 1
+
+        session.commit()
+        if projects_stored > 0:
+            context.log.info(f"Stored {projects_stored} projects/hackathons for {partition_key}")
+
+    def _store_raw_job(self, context: OutputContext, data: dict[str, Any]) -> None:
+        """Store raw job data using SQLAlchemy ORM with upsert."""
+        session = self._get_session()
+        partition_key = context.partition_key if hasattr(context, "partition_key") else None
+        record_id = partition_key or data.get("airtable_record_id")
+
+        # Serialize complex types (lists, dicts) to JSON strings for Text columns
+        values = {
+            "airtable_record_id": record_id,
+            "source": data.get("source", "manual"),
+            "source_id": _serialize_for_text(data.get("source_id")),
+            "source_url": _serialize_for_text(data.get("source_url")),
+            "job_title": _serialize_for_text(data.get("job_title")),
+            "company_name": _serialize_for_text(data.get("company_name")),
+            "job_description": _serialize_for_text(data.get("job_description")) or "",
+            "company_website_url": _serialize_for_text(data.get("company_website_url")),
+            "experience_level_raw": _serialize_for_text(data.get("experience_level_raw")),
+            "location_raw": _serialize_for_text(data.get("location_raw")),
+            "work_setup_raw": _serialize_for_text(data.get("work_setup_raw")),
+            "status_raw": _serialize_for_text(data.get("status_raw")),
+            "job_category_raw": _serialize_for_text(data.get("job_category_raw")),
+            "x_url": _serialize_for_text(data.get("x_url")),
+            "processing_status": ProcessingStatusEnum.PENDING,
+        }
+
+        stmt = insert(RawJob).values(**values)
+        if record_id:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["airtable_record_id"],
+                set_={
+                    k: getattr(stmt.excluded, k) for k in values.keys() if k != "airtable_record_id"
+                },
+            )
+
+        session.execute(stmt)
+        session.commit()
+        session.close()
+
+        context.log.info(f"Upserted raw job: {record_id}")
+
+    def _store_normalized_job(self, context: OutputContext, data: dict[str, Any]) -> None:
+        """Store normalized job data using SQLAlchemy ORM."""
+        session = self._get_session()
+        partition_key = context.partition_key if hasattr(context, "partition_key") else None
+        record_id = partition_key or data.get("airtable_record_id")
+
+        # Get raw job
+        raw_job = session.execute(
+            select(RawJob).where(RawJob.airtable_record_id == record_id)
+        ).scalar_one_or_none()
+
+        if not raw_job:
+            context.log.error(f"Raw job not found for: {record_id}")
+            session.close()
+            return
+
+        values = {
+            "airtable_record_id": record_id,
+            "raw_job_id": raw_job.id,
+            "job_title": data.get("job_title", "Unknown"),
+            "job_category": data.get("job_category"),
+            "company_name": data.get("company_name", "Unknown"),
+            "job_description": data.get("job_description"),
+            "role_summary": data.get("role_summary"),
+            "prompt_version": data.get("prompt_version"),
+            "model_version": data.get("model_version"),
+            "confidence_score": data.get("confidence_score"),
+            # Add other fields as needed
+        }
+
+        stmt = insert(NormalizedJob).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["airtable_record_id"],
+            set_={k: getattr(stmt.excluded, k) for k in values.keys() if k != "airtable_record_id"},
+        )
+
+        session.execute(stmt)
+        session.commit()
+
+        raw_job.processing_status = ProcessingStatusEnum.COMPLETED
+        session.commit()
+        session.close()
+
+        context.log.info(f"Upserted normalized job: {record_id}")
+
+    def _store_match(self, context: OutputContext, data: dict[str, Any]) -> None:
+        """Store match data using SQLAlchemy ORM."""
+        session = self._get_session()
+
+        values = {
+            "candidate_id": data.get("candidate_id"),
+            "job_id": data.get("job_id"),
+            "match_score": data.get("match_score", 0.0),
+            "skills_match_score": data.get("skills_match_score"),
+            "experience_match_score": data.get("experience_match_score"),
+            "compensation_match_score": data.get("compensation_match_score"),
+            "location_match_score": data.get("location_match_score"),
+            "matching_skills": data.get("matching_skills"),
+            "missing_skills": data.get("missing_skills"),
+            "match_reasoning": data.get("match_reasoning"),
+            "algorithm_version": data.get("algorithm_version"),
+        }
+
+        stmt = insert(Match).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_candidate_job",
+            set_={
+                "match_score": stmt.excluded.match_score,
+                "skills_match_score": stmt.excluded.skills_match_score,
+                "experience_match_score": stmt.excluded.experience_match_score,
+                "match_reasoning": stmt.excluded.match_reasoning,
+            },
+        )
+
+        session.execute(stmt)
+        session.commit()
+        session.close()
+
+        context.log.info(
+            f"Stored match: candidate={data.get('candidate_id')}, job={data.get('job_id')}"
+        )

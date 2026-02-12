@@ -4,18 +4,28 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
+# Load .env file
+load_dotenv()
+
 # Import Base and all models to ensure they're registered
-from talent_matching.models import Base
+from talent_matching.models import Base  # noqa: E402
 
 # Alembic Config object
 config = context.config
 
-# Set database URL from environment variable
-database_url = os.environ.get(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/talent_matching"
-)
+# Build database URL from individual env vars (or use DATABASE_URL if set)
+database_url = os.environ.get("DATABASE_URL")
+if not database_url:
+    pg_user = os.environ.get("POSTGRES_USER", "postgres")
+    pg_password = os.environ.get("POSTGRES_PASSWORD", "postgres")
+    pg_host = os.environ.get("POSTGRES_HOST", "localhost")
+    pg_port = os.environ.get("POSTGRES_PORT", "5432")
+    pg_db = os.environ.get("POSTGRES_DB", "talent_matching")
+    database_url = f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_db}"
+
 config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging
