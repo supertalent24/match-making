@@ -251,6 +251,9 @@ class CandidateExperience(Base):
     is_current: Mapped[bool] = mapped_column(Boolean, default=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Skills used in this role (denormalized for context/reference)
+    skills_used: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+
     # Ordering
     position_order: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 = most recent
 

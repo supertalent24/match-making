@@ -128,13 +128,14 @@ For each position in their career:
 | **Years** | Time in this role | 4.25 years |
 | **Is Current** | Still working there? | No |
 | **Description** | What they did (for AI matching) | "Cross-chain bridge and DeFi infrastructure. Built explorer indexing 50+ chains..." |
+| **Skills Used** | Technologies used in this role | ["TypeScript", "React", "PostgreSQL"] |
 
 ### Example: Candidate's Work History
 
-| # | Company | Position | Years | Current? |
-|---|---------|----------|-------|----------|
-| 1 | Blinq | Senior Software Developer | 0.5 | ✅ Yes |
-| 2 | Router Protocol | Senior Software Developer | 4.25 | No |
+| # | Company | Position | Years | Skills Used |
+|---|---------|----------|-------|-------------|
+| 1 | Blinq | Senior Software Developer | 0.5 | TypeScript, React, Solana |
+| 2 | Router Protocol | Senior Software Developer | 4.25 | TypeScript, Node.js, PostgreSQL |
 
 ---
 
@@ -380,7 +381,7 @@ Top 20-50 candidates ranked by match score, with breakdown showing:
 |----------|---------------|
 | **Profile** | Name, location, current role, seniority, years experience, salary expectations |
 | **Skills** | Each skill with rating (1-5), years, and best example |
-| **Experience** | Each job with company, title, years, and description |
+| **Experience** | Each job with company, title, years, description, and skills used |
 | **Projects** | Hackathons, side projects, open source with technologies and prizes |
 | **Soft Attributes** | 5 universal scores (leadership, autonomy, depth, communication, growth) |
 | **Vectors** | Experience, domain context, personality, per-position, per-skill |

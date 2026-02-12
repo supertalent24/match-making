@@ -305,6 +305,9 @@ CREATE TABLE candidate_experiences (
     -- Description (for vectorization)
     description         TEXT,                           -- Summary of role/responsibilities
     
+    -- Skills used in this role (denormalized for context/reference)
+    skills_used         TEXT[],                         -- e.g., ['TypeScript', 'React', 'PostgreSQL']
+    
     -- Vector for semantic matching
     position_vector     VECTOR(1536),                   -- Embedding of description
     
