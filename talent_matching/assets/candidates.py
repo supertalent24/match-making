@@ -1,12 +1,13 @@
 """Candidate pipeline assets.
 
 This module defines the asset graph for processing candidate data:
-1. raw_candidates: Ingested candidate data from CVs, GitHub, forms
-2. normalized_candidates: LLM-normalized structured profiles
-3. candidate_vectors: Semantic embeddings for matching
+1. airtable_candidates: Candidates fetched from Airtable (partitioned per record)
+2. raw_candidates: Raw candidate data stored in PostgreSQL
+3. normalized_candidates: LLM-normalized structured profiles
+4. candidate_vectors: Semantic embeddings for matching
 
-These are currently stub implementations that establish the asset structure.
-The actual processing logic will be implemented in subsequent phases.
+The pipeline uses dynamic partitions to process each candidate independently,
+enabling incremental processing and per-record change tracking.
 """
 
 from typing import Any
@@ -14,60 +15,103 @@ from typing import Any
 from dagster import (
     AssetExecutionContext,
     AssetIn,
+    DataVersion,
+    DynamicPartitionsDefinition,
+    Output,
     asset,
 )
 
 
+# Dynamic partition definition for candidates
+# Each candidate record gets its own partition key (Airtable record ID)
+candidate_partitions = DynamicPartitionsDefinition(name="candidates")
+
+
 @asset(
-    description="Raw candidate data ingested from various sources (CVs, GitHub, application forms)",
+    partitions_def=candidate_partitions,
+    description="Single candidate record fetched from Airtable",
     group_name="candidates",
+    required_resource_keys={"airtable"},
     metadata={
-        "table": "raw_candidates",
-        "source_types": ["cv", "github", "form"],
+        "source": "airtable",
     },
 )
-def raw_candidates(context: AssetExecutionContext) -> list[dict[str, Any]]:
-    """Ingest raw candidate data from multiple sources.
+def airtable_candidates(context: AssetExecutionContext) -> Output[dict[str, Any]]:
+    """Fetch a single candidate from Airtable by partition key.
     
-    In the full implementation, this asset would:
-    1. Read CVs from a configured directory or S3 bucket
-    2. Parse PDFs/DOCXs into text
-    3. Fetch GitHub profile data via API
-    4. Collect application form responses
+    Each partition key corresponds to an Airtable record ID.
+    The asset tracks data versions per record to enable change detection.
     
-    For now, returns mock data to establish the pipeline structure.
+    Returns:
+        Output with the candidate data and a DataVersion for staleness tracking.
     """
-    context.log.info("Ingesting raw candidate data (stub implementation)")
+    record_id = context.partition_key
+    context.log.info(f"Fetching candidate record: {record_id}")
     
-    # Mock data representing raw ingested candidates
-    mock_candidates = [
-        {
-            "id": "candidate-001",
-            "source": "cv",
-            "raw_data": {
-                "text": "John Doe - Senior Software Engineer with 5 years experience in Python and Rust...",
-                "filename": "john_doe_resume.pdf",
-            },
-        },
-        {
-            "id": "candidate-002", 
-            "source": "github",
-            "raw_data": {
-                "username": "jdoe",
-                "bio": "Building things with code",
-                "repos": 42,
-            },
-        },
-    ]
+    airtable = context.resources.airtable
+    candidate = airtable.fetch_record_by_id(record_id)
     
-    context.log.info(f"Ingested {len(mock_candidates)} raw candidates")
-    return mock_candidates
+    # Extract data version for Dagster's change detection
+    data_version = candidate.pop("_data_version", None)
+    
+    context.log.info(
+        f"Fetched candidate: {candidate.get('full_name', 'Unknown')} "
+        f"(version: {data_version})"
+    )
+    
+    return Output(
+        value=candidate,
+        data_version=DataVersion(data_version) if data_version else None,
+    )
 
 
 @asset(
+    partitions_def=candidate_partitions,
+    ins={"airtable_candidates": AssetIn()},
+    description="Raw candidate data stored in PostgreSQL",
+    group_name="candidates",
+    io_manager_key="postgres_io",
+    metadata={
+        "table": "raw_candidates",
+    },
+)
+def raw_candidates(
+    context: AssetExecutionContext,
+    airtable_candidates: dict[str, Any],
+) -> dict[str, Any]:
+    """Store raw candidate data in PostgreSQL.
+    
+    This asset receives candidate data from Airtable and prepares it
+    for storage in the raw_candidates table. The postgres_io manager
+    handles the actual database insertion/update.
+    
+    The partition key (Airtable record ID) ensures each candidate
+    is processed independently.
+    """
+    record_id = context.partition_key
+    context.log.info(f"Storing raw candidate: {record_id}")
+    
+    # The airtable_candidates data is already mapped to our model fields
+    # Just pass it through to the IO manager
+    raw_data = {
+        **airtable_candidates,
+        # Ensure required fields have defaults
+        "source": airtable_candidates.get("source", "airtable"),
+    }
+    
+    context.log.info(
+        f"Raw candidate data ready for storage: {raw_data.get('full_name', 'Unknown')}"
+    )
+    
+    return raw_data
+
+
+@asset(
+    partitions_def=candidate_partitions,
     ins={"raw_candidates": AssetIn()},
     description="LLM-normalized candidate profiles with structured fields",
     group_name="candidates",
+    io_manager_key="postgres_io",
     metadata={
         "table": "normalized_candidates",
         "llm_operation": "normalize_cv",
@@ -75,8 +119,8 @@ def raw_candidates(context: AssetExecutionContext) -> list[dict[str, Any]]:
 )
 def normalized_candidates(
     context: AssetExecutionContext,
-    raw_candidates: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    raw_candidates: dict[str, Any],
+) -> dict[str, Any]:
     """Normalize raw candidate data into structured profiles using LLM.
     
     In the full implementation, this asset would:
@@ -86,72 +130,72 @@ def normalized_candidates(
     
     For now, returns mock normalized data.
     """
-    context.log.info(f"Normalizing {len(raw_candidates)} candidates (stub implementation)")
+    record_id = context.partition_key
+    context.log.info(f"Normalizing candidate: {record_id} (stub implementation)")
     
     # Mock normalized output
-    normalized = []
-    for raw in raw_candidates:
-        normalized.append({
-            "candidate_id": raw["id"],
-            "normalized_json": {
-                "name": "Mock Candidate",
-                "years_of_experience": 5,
-                "skills": {
-                    "languages": ["Python", "Rust"],
-                    "frameworks": ["React", "FastAPI"],
-                    "domains": ["DeFi", "Infrastructure"],
-                },
-                "current_role": "Senior Software Engineer",
+    # TODO: Use LLM resource for actual normalization
+    normalized = {
+        "candidate_id": record_id,
+        "airtable_record_id": raw_candidates.get("airtable_record_id"),
+        "normalized_json": {
+            "name": raw_candidates.get("full_name", "Unknown"),
+            "years_of_experience": 5,  # Mock
+            "skills": {
+                "languages": ["Python", "Rust"],
+                "frameworks": ["React", "FastAPI"],
+                "domains": ["DeFi", "Infrastructure"],
             },
-            "prompt_version": "v1.0.0",
-            "model_version": "mock-v1",
-        })
+            "current_role": "Senior Software Engineer",
+            "location": raw_candidates.get("location_raw"),
+            "professional_summary": raw_candidates.get("professional_summary"),
+        },
+        "prompt_version": "v1.0.0",
+        "model_version": "mock-v1",
+    }
     
-    context.log.info(f"Normalized {len(normalized)} candidate profiles")
+    context.log.info(f"Normalized candidate: {raw_candidates.get('full_name', 'Unknown')}")
     return normalized
 
 
 @asset(
+    partitions_def=candidate_partitions,
     ins={"normalized_candidates": AssetIn()},
-    description="Semantic embeddings for candidate profiles (experience, skills, domain context)",
+    description="Semantic embeddings for candidate profiles",
     group_name="candidates",
+    io_manager_key="pgvector_io",
     metadata={
         "table": "candidate_vectors",
-        "vector_types": ["position", "experience", "domain_context", "personality"],
+        "vector_types": ["experience", "domain_context", "personality"],
     },
 )
 def candidate_vectors(
     context: AssetExecutionContext,
-    normalized_candidates: list[dict[str, Any]],
+    normalized_candidates: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Generate semantic embeddings for candidate profiles.
+    """Generate semantic embeddings for a candidate profile.
     
-    In the full implementation, this asset would:
-    1. Extract text sections for each vector type
-    2. Generate embeddings using the embedding resource
-    3. Store vectors with metadata for similarity search
-    
-    Vector types generated:
-    - position_vectors: Each individual role/project description
-    - experience_vector: Concatenated experience across all roles
-    - domain_context_vector: Industries and problem spaces
-    - personality_vector: Work style and personality signals
+    Generates multiple vector types:
+    - experience: Concatenated experience across all roles
+    - domain_context: Industries and problem spaces
+    - personality: Work style and personality signals
     
     For now, returns mock vector data.
     """
-    context.log.info(f"Generating vectors for {len(normalized_candidates)} candidates (stub implementation)")
+    record_id = context.partition_key
+    context.log.info(f"Generating vectors for candidate: {record_id} (stub implementation)")
     
     # Mock vector output (actual vectors would be 1536-dimensional)
+    # TODO: Use embeddings resource for actual vector generation
     vectors = []
-    for candidate in normalized_candidates:
-        # Generate multiple vector types per candidate
-        for vector_type in ["experience", "domain_context", "personality"]:
-            vectors.append({
-                "candidate_id": candidate["candidate_id"],
-                "vector_type": vector_type,
-                "vector": [0.1] * 1536,  # Mock 1536-dim vector
-                "model_version": "mock-embedding-v1",
-            })
+    for vector_type in ["experience", "domain_context", "personality"]:
+        vectors.append({
+            "candidate_id": record_id,
+            "airtable_record_id": normalized_candidates.get("airtable_record_id"),
+            "vector_type": vector_type,
+            "vector": [0.1] * 1536,  # Mock 1536-dim vector
+            "model_version": "mock-embedding-v1",
+        })
     
-    context.log.info(f"Generated {len(vectors)} vectors")
+    context.log.info(f"Generated {len(vectors)} vectors for candidate: {record_id}")
     return vectors

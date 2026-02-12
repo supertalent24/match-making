@@ -2,8 +2,10 @@
 
 This module is the entry point for Dagster. It wires together:
 - All assets (candidates, jobs, matches)
-- Resources (LLM, embeddings, GitHub API)
+- Resources (LLM, embeddings, GitHub API, Airtable)
 - IO Managers (PostgreSQL, pgvector)
+- Sensors (Airtable polling)
+- Jobs (candidate pipeline, sync, sample)
 - Configuration for different environments (dev, staging, prod)
 """
 
@@ -11,19 +13,30 @@ import os
 
 from dagster import (
     Definitions,
-    EnvVar,
     load_assets_from_modules,
 )
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from talent_matching.assets import candidates, jobs, social
 from talent_matching.io_managers import PgVectorIOManager, PostgresMetricsIOManager
+from talent_matching.jobs import (
+    candidate_ingest_job,
+    candidate_pipeline_job,
+    sample_candidates_job,
+    sync_airtable_job,
+)
 from talent_matching.resources import (
+    AirtableResource,
     GitHubAPIResource,
     LinkedInAPIResource,
     MockEmbeddingResource,
     MockLLMResource,
     TwitterAPIResource,
 )
+from talent_matching.sensors.airtable_sensor import airtable_candidate_sensor
 
 # Load all assets from the modules
 all_assets = load_assets_from_modules([candidates, jobs, social])
@@ -36,6 +49,12 @@ def get_environment() -> str:
 
 # Development resources (mock implementations)
 dev_resources = {
+    # Airtable resource for fetching candidates
+    "airtable": AirtableResource(
+        base_id=os.getenv("AIRTABLE_BASE_ID", ""),
+        table_id=os.getenv("AIRTABLE_TABLE_ID", ""),
+        api_key=os.getenv("AIRTABLE_API_KEY", ""),
+    ),
     # LLM resource for CV/job normalization and scoring
     "llm": MockLLMResource(
         model_version="mock-v1",
@@ -76,27 +95,6 @@ dev_resources = {
     ),
 }
 
-# Production resources would use real LLM APIs
-# These are commented out until the llm extras are installed
-# from openai import OpenAI
-#
-# prod_resources = {
-#     "llm": OpenAILLMResource(
-#         api_key=EnvVar("OPENAI_API_KEY"),
-#         model="gpt-4o",
-#     ),
-#     "embeddings": OpenAIEmbeddingResource(
-#         api_key=EnvVar("OPENAI_API_KEY"),
-#         model="text-embedding-3-large",
-#     ),
-#     "github": GitHubAPIResource(
-#         api_token=EnvVar("GITHUB_TOKEN"),
-#         mock_mode=False,
-#     ),
-#     "postgres_io": PostgresMetricsIOManager(...),
-#     "pgvector_io": PgVectorIOManager(...),
-# }
-
 
 def get_resources():
     """Get resources based on current environment."""
@@ -114,10 +112,27 @@ def get_resources():
         return dev_resources
 
 
+# All jobs available in the dashboard
+all_jobs = [
+    # Ops-based jobs (non-partitioned)
+    sync_airtable_job,
+    sample_candidates_job,
+    # Asset jobs (partitioned)
+    candidate_pipeline_job,
+    candidate_ingest_job,
+]
+
+# All sensors
+all_sensors = [
+    airtable_candidate_sensor,
+]
+
 # Create the Dagster Definitions object
 defs = Definitions(
     assets=all_assets,
     resources=get_resources(),
+    jobs=all_jobs,
+    sensors=all_sensors,
 )
 
 
@@ -126,7 +141,12 @@ def main():
     print("Talent Matching Dagster project loaded successfully!")
     print(f"Environment: {get_environment()}")
     print(f"Assets: {len(all_assets)}")
-    print("Run 'dagster dev' to start the development server.")
+    print(f"Jobs: {len(all_jobs)}")
+    print(f"Sensors: {len(all_sensors)}")
+    print("\nAvailable jobs:")
+    for job in all_jobs:
+        print(f"  - {job.name}")
+    print("\nRun 'dagster dev' to start the development server.")
 
 
 if __name__ == "__main__":
