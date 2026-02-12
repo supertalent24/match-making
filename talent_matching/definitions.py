@@ -2,7 +2,7 @@
 
 This module is the entry point for Dagster. It wires together:
 - All assets (candidates, jobs, matches)
-- Resources (LLM, embeddings, GitHub API, Airtable)
+- Resources (OpenRouter for LLM + embeddings, GitHub API, Airtable)
 - IO Managers (PostgreSQL, pgvector)
 - Sensors (Airtable polling)
 - Jobs (candidate pipeline, sync, sample)
@@ -13,6 +13,7 @@ import os
 
 from dagster import (
     Definitions,
+    EnvVar,
     load_assets_from_modules,
 )
 from dotenv import load_dotenv
@@ -29,7 +30,6 @@ from talent_matching.resources import (
     AirtableResource,
     GitHubAPIResource,
     LinkedInAPIResource,
-    MockEmbeddingResource,
     OpenRouterResource,
     TwitterAPIResource,
 )
@@ -48,23 +48,18 @@ def get_environment() -> str:
 
 
 # Development resources (mock implementations)
+# Using Dagster EnvVar for deferred resolution and better config visibility
 dev_resources = {
     # Airtable resource for fetching candidates
     "airtable": AirtableResource(
-        base_id=os.getenv("AIRTABLE_BASE_ID", ""),
-        table_id=os.getenv("AIRTABLE_TABLE_ID", ""),
-        api_key=os.getenv("AIRTABLE_API_KEY", ""),
+        base_id=EnvVar("AIRTABLE_BASE_ID"),
+        table_id=EnvVar("AIRTABLE_TABLE_ID"),
+        api_key=EnvVar("AIRTABLE_API_KEY"),
     ),
-    # OpenRouter LLM resource with cost tracking
+    # OpenRouter LLM resource with cost tracking (also handles embeddings)
     "openrouter": OpenRouterResource(
-        api_key=os.getenv("OPENROUTER_API_KEY", ""),
+        api_key=EnvVar("OPENROUTER_API_KEY"),
         default_model="openai/gpt-4o-mini",
-    ),
-    # Embedding resource for vector generation
-    "embeddings": MockEmbeddingResource(
-        model_version="mock-embedding-v1",
-        dimensions=1536,
-        deterministic=True,
     ),
     # GitHub API resource
     "github": GitHubAPIResource(
@@ -80,18 +75,18 @@ dev_resources = {
     ),
     # IO Managers for dual storage
     "postgres_io": PostgresMetricsIOManager(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-        user=os.getenv("POSTGRES_USER", "talent"),
-        password=os.getenv("POSTGRES_PASSWORD", "talent_dev"),
-        database=os.getenv("POSTGRES_DB", "talent_matching"),
+        host=EnvVar("POSTGRES_HOST"),
+        port=EnvVar.int("POSTGRES_PORT"),
+        user=EnvVar("POSTGRES_USER"),
+        password=EnvVar("POSTGRES_PASSWORD"),
+        database=EnvVar("POSTGRES_DB"),
     ),
     "pgvector_io": PgVectorIOManager(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-        user=os.getenv("POSTGRES_USER", "talent"),
-        password=os.getenv("POSTGRES_PASSWORD", "talent_dev"),
-        database=os.getenv("POSTGRES_DB", "talent_matching"),
+        host=EnvVar("POSTGRES_HOST"),
+        port=EnvVar.int("POSTGRES_PORT"),
+        user=EnvVar("POSTGRES_USER"),
+        password=EnvVar("POSTGRES_PASSWORD"),
+        database=EnvVar("POSTGRES_DB"),
     ),
 }
 
