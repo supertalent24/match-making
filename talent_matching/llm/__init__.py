@@ -14,6 +14,7 @@ from talent_matching.llm.operations.normalize_cv import (
     PROMPT_VERSION as CV_PROMPT_VERSION,
 )
 from talent_matching.llm.operations.normalize_cv import (
+    NormalizeCVResult,
     normalize_cv,
 )
 from talent_matching.llm.operations.normalize_job import (
@@ -32,6 +33,7 @@ from talent_matching.llm.operations.score_candidate import (
 __all__ = [
     # CV normalization
     "CV_PROMPT_VERSION",
+    "NormalizeCVResult",
     "normalize_cv",
     # Job normalization
     "JOB_PROMPT_VERSION",

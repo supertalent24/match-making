@@ -1,0 +1,10 @@
+2026-02-12 15:11:32 +0100 - dagster - DEBUG - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - 81040 - LOGS_CAPTURED - Started capturing logs in process (pid: 81040).
+2026-02-12 15:11:32 +0100 - dagster - DEBUG - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - 81040 - sync_airtable_partitions - STEP_START - Started execution of step "sync_airtable_partitions".
+2026-02-12 15:11:32 +0100 - dagster - INFO - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - sync_airtable_partitions - Fetching all record IDs from Airtable...
+2026-02-12 15:11:54 +0100 - dagster - INFO - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - sync_airtable_partitions - Found 6870 records in Airtable
+2026-02-12 15:11:54 +0100 - dagster - INFO - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - sync_airtable_partitions - Existing partitions: 0
+2026-02-12 15:11:54 +0100 - dagster - INFO - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - sync_airtable_partitions - Adding 6870 new partitions...
+2026-02-12 15:11:54 +0100 - dagster - DEBUG - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - 81040 - sync_airtable_partitions - STEP_OUTPUT - Yielded output "result" of type "dict". (Type check passed).
+2026-02-12 15:11:54 +0100 - dagster - DEBUG - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - sync_airtable_partitions - Writing file at: /Users/mikehenry/Workspace/Tests/STT-Assignment/storage/08f77127-d6db-4740-be6d-628d6de090d6/sync_airtable_partitions/result using PickledObjectFilesystemIOManager...
+2026-02-12 15:11:54 +0100 - dagster - DEBUG - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - 81040 - sync_airtable_partitions - HANDLED_OUTPUT - Handled output "result" using IO manager "io_manager"
+2026-02-12 15:11:54 +0100 - dagster - DEBUG - sync_airtable_job - 08f77127-d6db-4740-be6d-628d6de090d6 - 81040 - sync_airtable_partitions - STEP_SUCCESS - Finished execution of step "sync_airtable_partitions" in 22.24s.

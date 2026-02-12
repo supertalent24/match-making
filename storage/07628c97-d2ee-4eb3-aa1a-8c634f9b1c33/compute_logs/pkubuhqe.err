@@ -1,0 +1,19 @@
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85302 - LOGS_CAPTURED - Started capturing logs in process (pid: 85302).
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85302 - log_sample_stats - STEP_START - Started execution of step "log_sample_stats".
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - Loading file from: /Users/mikehenry/Workspace/Tests/STT-Assignment/storage/07628c97-d2ee-4eb3-aa1a-8c634f9b1c33/fetch_sample_candidates/result using PickledObjectFilesystemIOManager...
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85302 - log_sample_stats - LOADED_INPUT - Loaded input "candidates" using input manager "io_manager", from output "result" of step "fetch_sample_candidates"
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85302 - log_sample_stats - STEP_INPUT - Got input "candidates" of type "[Any]". (Type check passed).
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - ============================================================
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - SAMPLE STATISTICS
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - ============================================================
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - Total candidates: 20
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - With CV URL:      19 (95%)
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - With Skills:      20 (100%)
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - With Summary:     17 (85%)
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - With LinkedIn:    16 (80%)
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - With GitHub:      13 (65%)
+2026-02-12 15:19:28 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - ============================================================
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85302 - log_sample_stats - STEP_OUTPUT - Yielded output "result" of type "dict". (Type check passed).
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - log_sample_stats - Writing file at: /Users/mikehenry/Workspace/Tests/STT-Assignment/storage/07628c97-d2ee-4eb3-aa1a-8c634f9b1c33/log_sample_stats/result using PickledObjectFilesystemIOManager...
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85302 - log_sample_stats - HANDLED_OUTPUT - Handled output "result" using IO manager "io_manager"
+2026-02-12 15:19:28 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85302 - log_sample_stats - STEP_SUCCESS - Finished execution of step "log_sample_stats" in 115ms.

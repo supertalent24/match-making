@@ -68,10 +68,34 @@ Be factual. If information is missing, use null. Do not make up information.
 Infer seniority_level from job titles and years of experience when possible."""
 
 
+class NormalizeCVResult:
+    """Result of CV normalization with usage stats for Dagster metadata."""
+
+    def __init__(self, data: dict[str, Any], usage: dict[str, Any]):
+        self.data = data
+        self.usage = usage
+
+    @property
+    def input_tokens(self) -> int:
+        return self.usage.get("prompt_tokens", 0)
+
+    @property
+    def output_tokens(self) -> int:
+        return self.usage.get("completion_tokens", 0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cost_usd(self) -> float:
+        return float(self.usage.get("cost", 0))
+
+
 async def normalize_cv(
     openrouter: "OpenRouterResource",
     raw_cv_text: str,
-) -> dict[str, Any]:
+) -> NormalizeCVResult:
     """Normalize a CV into structured format using LLM.
 
     Args:
@@ -79,7 +103,7 @@ async def normalize_cv(
         raw_cv_text: Raw text extracted from a CV/resume
 
     Returns:
-        Normalized candidate profile as a dictionary
+        NormalizeCVResult with data and usage stats for metadata
     """
     response = await openrouter.complete(
         messages=[
@@ -93,4 +117,6 @@ async def normalize_cv(
     )
 
     content = response["choices"][0]["message"]["content"]
-    return json.loads(content)
+    usage = response.get("usage", {})
+
+    return NormalizeCVResult(data=json.loads(content), usage=usage)

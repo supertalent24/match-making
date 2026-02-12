@@ -115,7 +115,7 @@ def raw_candidates(
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
-    code_version="1.1.0",  # Bump when prompt or normalization logic changes
+    code_version="1.2.1",  # Bump when prompt or normalization logic changes
     metadata={
         "table": "normalized_candidates",
         "llm_operation": "normalize_cv",
@@ -167,6 +167,16 @@ def normalized_candidates(
 
     if not cv_text.strip():
         context.log.warning(f"No CV data available for candidate: {record_id}")
+        # Add metadata for skipped LLM call
+        context.add_output_metadata(
+            {
+                "llm_cost_usd": 0.0,
+                "llm_tokens_input": 0,
+                "llm_tokens_output": 0,
+                "llm_model": "skipped",
+                "skip_reason": "no_cv_data",
+            }
+        )
         # Return minimal normalized data for candidates without CV text
         return {
             "candidate_id": record_id,
@@ -183,35 +193,36 @@ def normalized_candidates(
 
     context.log.info(f"Normalizing candidate: {record_id} via OpenRouter API")
 
-    # Check if OpenRouter API key is configured
+    # Fail fast if API key is not configured
     if not os.getenv("OPENROUTER_API_KEY"):
-        context.log.warning(
-            "OPENROUTER_API_KEY not set - using mock normalization. "
-            "Set the env var to enable real LLM normalization."
+        raise ValueError(
+            "OPENROUTER_API_KEY environment variable is not set. "
+            "Set it in .env or export it before running the pipeline."
         )
-        # Fallback to mock data when API key is not configured
-        return {
-            "candidate_id": record_id,
-            "airtable_record_id": raw_candidates.get("airtable_record_id"),
-            "normalized_json": {
-                "name": raw_candidates.get("full_name", "Unknown"),
-                "years_of_experience": None,
-                "skills": {"languages": [], "frameworks": [], "tools": [], "domains": []},
-                "current_role": None,
-                "location": raw_candidates.get("location_raw"),
-                "professional_summary": raw_candidates.get("professional_summary"),
-            },
-        }
 
     # Call the normalize_cv operation (prompt lives in talent_matching.llm.operations)
-    normalized_json = asyncio.run(normalize_cv(openrouter, cv_text))
+    result = asyncio.run(normalize_cv(openrouter, cv_text))
 
-    context.log.info(f"Normalized candidate: {normalized_json.get('name', 'Unknown')}")
+    # Add LLM cost metadata to the materialization (visible in Dagster UI)
+    context.add_output_metadata(
+        {
+            "llm_cost_usd": result.cost_usd,
+            "llm_tokens_input": result.input_tokens,
+            "llm_tokens_output": result.output_tokens,
+            "llm_tokens_total": result.total_tokens,
+            "llm_model": "openai/gpt-4o-mini",
+        }
+    )
+
+    context.log.info(
+        f"Normalized candidate: {result.data.get('name', 'Unknown')} "
+        f"(cost: ${result.cost_usd:.6f}, tokens: {result.total_tokens})"
+    )
 
     return {
         "candidate_id": record_id,
         "airtable_record_id": raw_candidates.get("airtable_record_id"),
-        "normalized_json": normalized_json,
+        "normalized_json": result.data,
     }
 
 

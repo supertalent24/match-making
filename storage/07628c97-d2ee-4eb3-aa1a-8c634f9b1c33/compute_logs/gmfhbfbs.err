@@ -1,0 +1,15 @@
+2026-02-12 15:19:04 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85089 - LOGS_CAPTURED - Started capturing logs in process (pid: 85089).
+2026-02-12 15:19:04 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85089 - fetch_sample_candidates - STEP_START - Started execution of step "fetch_sample_candidates".
+2026-02-12 15:19:04 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85089 - fetch_sample_candidates - STEP_INPUT - Got input "sample_size" of type "Int". (Type check passed).
+2026-02-12 15:19:04 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates - Fetching 20 sample candidates from Airtable...
+2026-02-12 15:19:27 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates - Fetched 20 candidates
+2026-02-12 15:19:27 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates -   1. John Porter
+2026-02-12 15:19:27 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates -   2. Miguel Norberto
+2026-02-12 15:19:27 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates -   3. Yumna Mustafa Miller
+2026-02-12 15:19:27 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates -   4. Ayoub Dardory
+2026-02-12 15:19:27 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates -   5. Krzysztof (Chris) Scibiorek
+2026-02-12 15:19:27 +0100 - dagster - INFO - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates -   ... and 15 more
+2026-02-12 15:19:27 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85089 - fetch_sample_candidates - STEP_OUTPUT - Yielded output "result" of type "[Any]". (Type check passed).
+2026-02-12 15:19:27 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - fetch_sample_candidates - Writing file at: /Users/mikehenry/Workspace/Tests/STT-Assignment/storage/07628c97-d2ee-4eb3-aa1a-8c634f9b1c33/fetch_sample_candidates/result using PickledObjectFilesystemIOManager...
+2026-02-12 15:19:27 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85089 - fetch_sample_candidates - HANDLED_OUTPUT - Handled output "result" using IO manager "io_manager"
+2026-02-12 15:19:27 +0100 - dagster - DEBUG - sample_candidates_job - 07628c97-d2ee-4eb3-aa1a-8c634f9b1c33 - 85089 - fetch_sample_candidates - STEP_SUCCESS - Finished execution of step "fetch_sample_candidates" in 22.25s.
