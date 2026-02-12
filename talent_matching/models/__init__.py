@@ -23,9 +23,13 @@ from talent_matching.models.candidates import (
     CandidateAttribute,
     CandidateRoleFitness,
     CandidateGithubMetrics,
+    CandidateTwitterMetrics,
+    CandidateLinkedinMetrics,
 )
 from talent_matching.models.jobs import NormalizedJob, JobRequiredSkill
 from talent_matching.models.matches import Match
+from talent_matching.models.vectors import CandidateVector, JobVector
+from talent_matching.models.llm_costs import LLMCost
 
 __all__ = [
     # Base
@@ -55,9 +59,16 @@ __all__ = [
     "CandidateAttribute",
     "CandidateRoleFitness",
     "CandidateGithubMetrics",
+    "CandidateTwitterMetrics",
+    "CandidateLinkedinMetrics",
     # Jobs
     "NormalizedJob",
     "JobRequiredSkill",
     # Matches
     "Match",
+    # Vectors
+    "CandidateVector",
+    "JobVector",
+    # LLM Costs
+    "LLMCost",
 ]
