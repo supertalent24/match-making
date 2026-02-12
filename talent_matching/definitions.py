@@ -22,10 +22,8 @@ from talent_matching.io_managers import PgVectorIOManager, PostgresMetricsIOMana
 from talent_matching.jobs import (
     candidate_ingest_job,
     candidate_pipeline_job,
-    full_pipeline_job,
     sample_candidates_job,
     sync_airtable_job,
-    test_pipeline_20_job,
 )
 from talent_matching.resources import (
     AirtableResource,
@@ -116,15 +114,12 @@ def get_resources():
 
 # All jobs available in the dashboard
 all_jobs = [
-    # Ops-based jobs (non-partitioned)
-    sync_airtable_job,
-    sample_candidates_job,
-    # Batch pipeline jobs
-    full_pipeline_job,
-    test_pipeline_20_job,
-    # Asset jobs (partitioned)
+    # Asset jobs (partitioned) - use Backfill in UI to select partitions
     candidate_pipeline_job,
     candidate_ingest_job,
+    # Ops jobs (non-partitioned)
+    sync_airtable_job,
+    sample_candidates_job,
 ]
 
 # All sensors
