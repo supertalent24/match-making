@@ -17,7 +17,10 @@ USAGE:
 """
 
 from dagster import (
+    Backoff,
+    Jitter,
     OpExecutionContext,
+    RetryPolicy,
     define_asset_job,
     job,
     op,
@@ -35,6 +38,15 @@ from talent_matching.assets.candidates import (
 # ASSET JOBS (for partitioned processing)
 # =============================================================================
 
+# Retry policy for API calls (rate limits, transient errors)
+# Uses exponential backoff: 1s, 2s, 4s between retries
+openrouter_retry_policy = RetryPolicy(
+    max_retries=3,
+    delay=1,  # 1 second base delay
+    backoff=Backoff.EXPONENTIAL,
+    jitter=Jitter.PLUS_MINUS,  # Add randomness to avoid thundering herd
+)
+
 candidate_pipeline_job = define_asset_job(
     name="candidate_pipeline",
     description=(
@@ -49,6 +61,8 @@ candidate_pipeline_job = define_asset_job(
         candidate_vectors,
     ],
     partitions_def=candidate_partitions,
+    # Retry on failures (rate limits, transient API errors)
+    op_retry_policy=openrouter_retry_policy,
 )
 
 candidate_ingest_job = define_asset_job(
