@@ -403,3 +403,8 @@ Top 20-50 candidates ranked by match score, with breakdown showing:
 For technical implementation details, see:
 - [Data Model Proposal.md](./Data%20Model%20Proposal.md) — Full database schema
 - [Skills Taxonomy System Proposal.md](./Skills%20Taxonomy%20System%20Proposal.md) — How we normalize and rate skills
+
+**Code Implementation:**
+- [`talent_matching/models/`](../../talent_matching/models/) — SQLAlchemy models (Python)
+- [`talent_matching/models/candidates.py`](../../talent_matching/models/candidates.py) — Smart Profile schema
+- [`talent_matching/models/jobs.py`](../../talent_matching/models/jobs.py) — Job requirements schema

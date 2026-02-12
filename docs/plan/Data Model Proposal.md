@@ -7,6 +7,16 @@
 **Related Documents:**
 - [Skills Taxonomy System Proposal](./Skills%20Taxonomy%20System%20Proposal.md) — Canonical skills, rating, and role fitness scoring
 
+**Implementation (SQLAlchemy Models):**
+| Model | File | Description |
+|-------|------|-------------|
+| `RawCandidate`, `RawJob` | [`talent_matching/models/raw.py`](../../talent_matching/models/raw.py) | Raw input data before normalization |
+| `NormalizedCandidate`, `CandidateSkill`, `CandidateExperience`, `CandidateProject`, `CandidateAttribute` | [`talent_matching/models/candidates.py`](../../talent_matching/models/candidates.py) | Smart Profile models |
+| `NormalizedJob`, `JobRequiredSkill` | [`talent_matching/models/jobs.py`](../../talent_matching/models/jobs.py) | Normalized job requirements |
+| `Skill`, `SkillAlias` | [`talent_matching/models/skills.py`](../../talent_matching/models/skills.py) | Skills taxonomy |
+| `Match` | [`talent_matching/models/matches.py`](../../talent_matching/models/matches.py) | Candidate-job match results |
+| Enums | [`talent_matching/models/enums.py`](../../talent_matching/models/enums.py) | All enum types |
+
 ---
 
 ## Table of Contents
