@@ -10,6 +10,8 @@ The pipeline uses dynamic partitions to process each candidate independently,
 enabling incremental processing and per-record change tracking.
 """
 
+import asyncio
+import os
 from typing import Any
 
 from dagster import (
@@ -20,6 +22,9 @@ from dagster import (
     Output,
     asset,
 )
+
+from talent_matching.llm import normalize_cv
+from talent_matching.llm.operations.normalize_cv import PROMPT_VERSION as _CV_PROMPT_VERSION
 
 
 # Dynamic partition definition for candidates
@@ -111,7 +116,9 @@ def raw_candidates(
     ins={"raw_candidates": AssetIn()},
     description="LLM-normalized candidate profiles with structured fields",
     group_name="candidates",
+    required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
+    code_version="1.0.0",  # Bump when prompt or normalization logic changes
     metadata={
         "table": "normalized_candidates",
         "llm_operation": "normalize_cv",
@@ -122,40 +129,99 @@ def normalized_candidates(
     raw_candidates: dict[str, Any],
 ) -> dict[str, Any]:
     """Normalize raw candidate data into structured profiles using LLM.
-    
-    In the full implementation, this asset would:
-    1. Send raw CV text to the LLM resource for normalization
+
+    Uses OpenRouter API via talent_matching.llm operations to:
+    1. Send raw CV text to the LLM for normalization
     2. Extract structured fields (skills, experience, education, etc.)
-    3. Store both the normalized JSON and versioning metadata
-    
-    For now, returns mock normalized data.
+    3. Track token usage and costs per request
+    4. Store both the normalized data and versioning metadata
+
+    The code_version in the decorator tracks when this asset's logic changes.
+    Bump it when modifying prompt handling or normalization logic.
     """
     record_id = context.partition_key
-    context.log.info(f"Normalizing candidate: {record_id} (stub implementation)")
-    
-    # Mock normalized output
-    # TODO: Use LLM resource for actual normalization
-    normalized = {
+    openrouter = context.resources.openrouter
+
+    # Set context for cost tracking
+    openrouter.set_context(
+        run_id=context.run_id,
+        asset_key="normalized_candidates",
+        partition_key=record_id,
+    )
+
+    # Build CV text from available raw data
+    cv_parts = []
+    if raw_candidates.get("full_name"):
+        cv_parts.append(f"Name: {raw_candidates['full_name']}")
+    if raw_candidates.get("professional_summary"):
+        cv_parts.append(f"Summary: {raw_candidates['professional_summary']}")
+    if raw_candidates.get("skills_raw"):
+        cv_parts.append(f"Skills: {raw_candidates['skills_raw']}")
+    if raw_candidates.get("work_experience_raw"):
+        cv_parts.append(f"Experience: {raw_candidates['work_experience_raw']}")
+    if raw_candidates.get("cv_text"):
+        cv_parts.append(f"CV Content:\n{raw_candidates['cv_text']}")
+    if raw_candidates.get("location_raw"):
+        cv_parts.append(f"Location: {raw_candidates['location_raw']}")
+    if raw_candidates.get("proof_of_work"):
+        cv_parts.append(f"Proof of Work: {raw_candidates['proof_of_work']}")
+
+    cv_text = "\n\n".join(cv_parts)
+
+    if not cv_text.strip():
+        context.log.warning(f"No CV data available for candidate: {record_id}")
+        # Return minimal normalized data for candidates without CV text
+        return {
+            "candidate_id": record_id,
+            "airtable_record_id": raw_candidates.get("airtable_record_id"),
+            "normalized_json": {
+                "name": raw_candidates.get("full_name", "Unknown"),
+                "years_of_experience": None,
+                "skills": {"languages": [], "frameworks": [], "tools": [], "domains": []},
+                "current_role": None,
+                "location": None,
+                "professional_summary": None,
+            },
+            "prompt_version": _CV_PROMPT_VERSION,
+            "model_version": "skipped",
+        }
+
+    context.log.info(f"Normalizing candidate: {record_id} via OpenRouter")
+
+    # Check if OpenRouter API key is configured
+    if not os.getenv("OPENROUTER_API_KEY"):
+        context.log.warning(
+            "OPENROUTER_API_KEY not set - using mock normalization. "
+            "Set the env var to enable real LLM normalization."
+        )
+        # Fallback to mock data when API key is not configured
+        return {
+            "candidate_id": record_id,
+            "airtable_record_id": raw_candidates.get("airtable_record_id"),
+            "normalized_json": {
+                "name": raw_candidates.get("full_name", "Unknown"),
+                "years_of_experience": None,
+                "skills": {"languages": [], "frameworks": [], "tools": [], "domains": []},
+                "current_role": None,
+                "location": raw_candidates.get("location_raw"),
+                "professional_summary": raw_candidates.get("professional_summary"),
+            },
+            "prompt_version": _CV_PROMPT_VERSION,
+            "model_version": "mock-v1",
+        }
+
+    # Call the normalize_cv operation (prompt lives in talent_matching.llm.operations)
+    normalized_json = asyncio.run(normalize_cv(openrouter, cv_text))
+
+    context.log.info(f"Normalized candidate: {normalized_json.get('name', 'Unknown')}")
+
+    return {
         "candidate_id": record_id,
         "airtable_record_id": raw_candidates.get("airtable_record_id"),
-        "normalized_json": {
-            "name": raw_candidates.get("full_name", "Unknown"),
-            "years_of_experience": 5,  # Mock
-            "skills": {
-                "languages": ["Python", "Rust"],
-                "frameworks": ["React", "FastAPI"],
-                "domains": ["DeFi", "Infrastructure"],
-            },
-            "current_role": "Senior Software Engineer",
-            "location": raw_candidates.get("location_raw"),
-            "professional_summary": raw_candidates.get("professional_summary"),
-        },
-        "prompt_version": "v1.0.0",
-        "model_version": "mock-v1",
+        "normalized_json": normalized_json,
+        "prompt_version": _CV_PROMPT_VERSION,
+        "model_version": "openai/gpt-4o-mini",
     }
-    
-    context.log.info(f"Normalized candidate: {raw_candidates.get('full_name', 'Unknown')}")
-    return normalized
 
 
 @asset(

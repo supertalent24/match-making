@@ -18,6 +18,9 @@ from dagster import (
     asset,
 )
 
+# Import prompt version for metadata tracking (auditing which prompts were used)
+from talent_matching.llm import JOB_PROMPT_VERSION as _JOB_PROMPT_VERSION
+
 
 @asset(
     description="Raw job descriptions ingested from various sources",
@@ -87,6 +90,7 @@ def raw_jobs(context: AssetExecutionContext) -> list[dict[str, Any]]:
     ins={"raw_jobs": AssetIn()},
     description="LLM-normalized job requirements with structured fields",
     group_name="jobs",
+    code_version="1.0.0",  # Bump when prompt or normalization logic changes
     metadata={
         "table": "normalized_jobs",
         "llm_operation": "normalize_job",
@@ -97,16 +101,21 @@ def normalized_jobs(
     raw_jobs: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Normalize raw job descriptions into structured requirements using LLM.
-    
+
     In the full implementation, this asset would:
     1. Send job descriptions to the LLM resource for normalization
     2. Extract must-have skills, nice-to-have skills, experience requirements
     3. Identify domain context and team culture signals
-    
+
+    The code_version in the decorator tracks when this asset's logic changes.
+    Bump it when modifying prompt handling or normalization logic.
+
+    TODO: Add openrouter resource and use normalize_job() from talent_matching.llm
+
     For now, returns mock normalized data.
     """
     context.log.info(f"Normalizing {len(raw_jobs)} jobs (stub implementation)")
-    
+
     # Mock normalized output
     normalized = []
     for raw in raw_jobs:
@@ -124,10 +133,10 @@ def normalized_jobs(
                 },
                 "tech_stack": ["Rust", "Go", "PostgreSQL"],
             },
-            "prompt_version": "v1.0.0",
+            "prompt_version": _JOB_PROMPT_VERSION,
             "model_version": "mock-v1",
         })
-    
+
     context.log.info(f"Normalized {len(normalized)} job descriptions")
     return normalized
 
@@ -185,6 +194,7 @@ def job_vectors(
     },
     description="Computed matches between jobs and candidates with scores",
     group_name="matching",
+    code_version="1.0.0",  # Bump when scoring logic or weights change
     metadata={
         "table": "matches",
         "scoring_weights": {"keyword": 0.4, "vector": 0.6},

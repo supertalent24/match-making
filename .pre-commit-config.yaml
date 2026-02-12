@@ -1,0 +1,34 @@
+# Pre-commit hooks configuration
+# Install with: pre-commit install
+# Run manually with: pre-commit run --all-files
+
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  # Ruff for linting and formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # Custom Dagster code_version check
+  - repo: local
+    hooks:
+      - id: dagster-code-version
+        name: Check Dagster asset code_versions
+        description: Ensure code_version is updated when asset code changes
+        entry: python scripts/check_dagster_code_versions.py
+        language: python
+        types: [python]
+        pass_filenames: false
+        # Only run when assets or LLM operations are changed
+        files: ^(talent_matching/assets/|talent_matching/llm/).*\.py$
