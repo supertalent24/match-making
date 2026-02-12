@@ -115,7 +115,7 @@ def raw_candidates(
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
-    code_version="1.2.1",  # Bump when prompt or normalization logic changes
+    code_version="1.3.0",  # Bump when prompt or normalization logic changes
     metadata={
         "table": "normalized_candidates",
         "llm_operation": "normalize_cv",
@@ -189,6 +189,7 @@ def normalized_candidates(
                 "location": None,
                 "professional_summary": None,
             },
+            "model_version": None,
         }
 
     context.log.info(f"Normalizing candidate: {record_id} via OpenRouter API")
@@ -210,19 +211,20 @@ def normalized_candidates(
             "llm_tokens_input": result.input_tokens,
             "llm_tokens_output": result.output_tokens,
             "llm_tokens_total": result.total_tokens,
-            "llm_model": "openai/gpt-4o-mini",
+            "llm_model": result.model,
         }
     )
 
     context.log.info(
         f"Normalized candidate: {result.data.get('name', 'Unknown')} "
-        f"(cost: ${result.cost_usd:.6f}, tokens: {result.total_tokens})"
+        f"(cost: ${result.cost_usd:.6f}, tokens: {result.total_tokens}, model: {result.model})"
     )
 
     return {
         "candidate_id": record_id,
         "airtable_record_id": raw_candidates.get("airtable_record_id"),
         "normalized_json": result.data,
+        "model_version": result.model,
     }
 
 

@@ -67,11 +67,36 @@ Scoring guidelines:
 - 0.0-0.3: Weak candidate, significant concerns"""
 
 
+class ScoreCandidateResult:
+    """Result of candidate scoring with usage stats for Dagster metadata."""
+
+    def __init__(self, data: dict[str, Any], usage: dict[str, Any], model: str):
+        self.data = data
+        self.usage = usage
+        self.model = model
+
+    @property
+    def input_tokens(self) -> int:
+        return self.usage.get("prompt_tokens", 0)
+
+    @property
+    def output_tokens(self) -> int:
+        return self.usage.get("completion_tokens", 0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cost_usd(self) -> float:
+        return float(self.usage.get("cost", 0))
+
+
 async def score_candidate(
     openrouter: "OpenRouterResource",
     normalized_profile: dict[str, Any],
     job_requirements: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> ScoreCandidateResult:
     """Generate scores for a candidate profile.
 
     Args:
@@ -80,8 +105,10 @@ async def score_candidate(
         job_requirements: Optional job to score against
 
     Returns:
-        Scoring breakdown with individual metric scores and reasoning
+        ScoreCandidateResult with scores, usage stats, and model for metadata
     """
+    model = DEFAULT_MODEL
+
     if job_requirements:
         system_prompt = SYSTEM_PROMPT_JOB_FIT
         user_content = f"""Candidate Profile:
@@ -99,11 +126,13 @@ Job Requirements:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        model=DEFAULT_MODEL,
+        model=model,
         operation="score_candidate",
         response_format={"type": "json_object"},
         temperature=0.0,
     )
 
     content = response["choices"][0]["message"]["content"]
-    return json.loads(content)
+    usage = response.get("usage", {})
+
+    return ScoreCandidateResult(data=json.loads(content), usage=usage, model=model)

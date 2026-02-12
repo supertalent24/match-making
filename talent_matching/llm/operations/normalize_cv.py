@@ -71,9 +71,10 @@ Infer seniority_level from job titles and years of experience when possible."""
 class NormalizeCVResult:
     """Result of CV normalization with usage stats for Dagster metadata."""
 
-    def __init__(self, data: dict[str, Any], usage: dict[str, Any]):
+    def __init__(self, data: dict[str, Any], usage: dict[str, Any], model: str):
         self.data = data
         self.usage = usage
+        self.model = model
 
     @property
     def input_tokens(self) -> int:
@@ -105,12 +106,13 @@ async def normalize_cv(
     Returns:
         NormalizeCVResult with data and usage stats for metadata
     """
+    model = DEFAULT_MODEL
     response = await openrouter.complete(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Parse this CV:\n\n{raw_cv_text}"},
         ],
-        model=DEFAULT_MODEL,
+        model=model,
         operation="normalize_cv",
         response_format={"type": "json_object"},
         temperature=0.0,
@@ -119,4 +121,4 @@ async def normalize_cv(
     content = response["choices"][0]["message"]["content"]
     usage = response.get("usage", {})
 
-    return NormalizeCVResult(data=json.loads(content), usage=usage)
+    return NormalizeCVResult(data=json.loads(content), usage=usage, model=model)

@@ -53,10 +53,35 @@ SYSTEM_PROMPT = """You are a job description parser. Extract and normalize this 
 Be factual. If information is not mentioned, use null."""
 
 
+class NormalizeJobResult:
+    """Result of job normalization with usage stats for Dagster metadata."""
+
+    def __init__(self, data: dict[str, Any], usage: dict[str, Any], model: str):
+        self.data = data
+        self.usage = usage
+        self.model = model
+
+    @property
+    def input_tokens(self) -> int:
+        return self.usage.get("prompt_tokens", 0)
+
+    @property
+    def output_tokens(self) -> int:
+        return self.usage.get("completion_tokens", 0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cost_usd(self) -> float:
+        return float(self.usage.get("cost", 0))
+
+
 async def normalize_job(
     openrouter: "OpenRouterResource",
     raw_job_text: str,
-) -> dict[str, Any]:
+) -> NormalizeJobResult:
     """Normalize a job description into structured format using LLM.
 
     Args:
@@ -64,18 +89,21 @@ async def normalize_job(
         raw_job_text: Raw job description text
 
     Returns:
-        Normalized job requirements as a dictionary
+        NormalizeJobResult with data, usage stats, and model for metadata
     """
+    model = DEFAULT_MODEL
     response = await openrouter.complete(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Parse this job description:\n\n{raw_job_text}"},
         ],
-        model=DEFAULT_MODEL,
+        model=model,
         operation="normalize_job",
         response_format={"type": "json_object"},
         temperature=0.0,
     )
 
     content = response["choices"][0]["message"]["content"]
-    return json.loads(content)
+    usage = response.get("usage", {})
+
+    return NormalizeJobResult(data=json.loads(content), usage=usage, model=model)
