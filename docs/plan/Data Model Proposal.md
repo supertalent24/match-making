@@ -381,7 +381,63 @@ CREATE TABLE skill_aliases (
 CREATE INDEX idx_skill_aliases_alias ON skill_aliases(lower(alias));
 ```
 
-### 2.7 Role Fitness Scores
+### 2.7 Candidate Projects & Hackathons
+
+Individual projects, hackathons, and side projects (separate from employment history). This is one of the three key artifacts of any CV: **Skills, Jobs, and Projects**.
+
+```sql
+CREATE TABLE candidate_projects (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    candidate_id        UUID NOT NULL REFERENCES normalized_candidates(id) ON DELETE CASCADE,
+    
+    -- Project details
+    project_name        TEXT NOT NULL,
+    description         TEXT,                           -- Summary for AI matching
+    url                 TEXT,                           -- Link to project/repo
+    technologies        TEXT[],                         -- Technologies used
+    
+    -- Hackathon-specific fields
+    is_hackathon        BOOLEAN DEFAULT FALSE,
+    hackathon_name      TEXT,                           -- e.g., "Solana Grizzlython"
+    prize_won           TEXT,                           -- e.g., "1st Place", "Best DeFi"
+    prize_amount_usd    INTEGER,
+    
+    -- Timeline
+    year                INTEGER,                        -- Year of project
+    start_date          DATE,
+    end_date            DATE,
+    
+    -- Ordering
+    project_order       INTEGER DEFAULT 1,              -- 1 = most important/recent
+    
+    -- Vector for semantic matching (Phase 2)
+    project_vector      VECTOR(1536),                   -- Embedding of description
+    
+    -- Metadata
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_projects_candidate ON candidate_projects(candidate_id);
+CREATE INDEX idx_projects_hackathon ON candidate_projects(is_hackathon);
+CREATE INDEX idx_project_vec ON candidate_projects 
+    USING hnsw (project_vector vector_cosine_ops);
+```
+
+**Why Projects Matter:**
+
+| Candidate Type | What Projects Show |
+|----------------|-------------------|
+| **Tech** | Side projects, open source contributions, hackathon wins |
+| **Non-Tech** | Marketing campaigns, growth experiments, content portfolios |
+| **Mixed** | Personal brands, community initiatives, startup ventures |
+
+Projects are especially valuable for:
+- Hackathon achievements (with prizes and recognition)
+- Self-directed work demonstrating autonomy
+- Technical depth beyond day jobs
+- Non-tech candidates' portfolios (campaigns, content, etc.)
+
+### 2.8 Role Fitness Scores
 
 Score each candidate's fitness for their desired roles:
 
@@ -408,7 +464,7 @@ CREATE INDEX idx_role_fitness_candidate ON candidate_role_fitness(candidate_id);
 CREATE INDEX idx_role_fitness_score ON candidate_role_fitness(role_name, fitness_score DESC);
 ```
 
-### 2.8 Universal Soft Attributes
+### 2.9 Universal Soft Attributes
 
 LLM-scored universal attributes that apply across all job types. These replace job-specific boolean flags with flexible scores:
 
@@ -482,14 +538,28 @@ These are **universal** — they apply to frontend, backend, DevRel, growth, and
 ```sql
 CREATE TABLE raw_jobs (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source              VARCHAR(50) NOT NULL,           -- 'manual', 'api', 'partner'
+    source              VARCHAR(50) NOT NULL,           -- 'manual', 'api', 'partner', 'paste'
     source_id           VARCHAR(255),
+    source_url          TEXT,
     
-    -- Original input
-    job_title           TEXT NOT NULL,
+    -- ═══════════════════════════════════════════════════════════════════
+    -- CORE FIELDS
+    -- For unstructured input: only job_description is required
+    -- For structured input: fields come pre-parsed from Notion/Airtable
+    -- ═══════════════════════════════════════════════════════════════════
+    job_title           TEXT,                           -- Can be extracted by LLM if not provided
     company_name        TEXT,
-    job_description     TEXT NOT NULL,
-    company_info        TEXT,
+    job_description     TEXT NOT NULL,                  -- Raw job posting text (always required)
+    company_website_url TEXT,                           -- Company website for additional context
+    
+    -- ═══════════════════════════════════════════════════════════════════
+    -- STRUCTURED FIELDS (from Notion Job Board, optional)
+    -- ═══════════════════════════════════════════════════════════════════
+    experience_level_raw TEXT,                          -- "Junior", "Mid", "Senior"
+    location_raw        TEXT,                           -- "Europe", "Global", etc.
+    work_setup_raw      TEXT,                           -- "Remote", "Hybrid", "On-Site"
+    status_raw          TEXT,                           -- "Active", "Closed"
+    job_category_raw    TEXT,                           -- "Frontend Engineer", etc.
     
     -- Metadata
     ingested_at         TIMESTAMPTZ DEFAULT NOW(),
@@ -498,6 +568,15 @@ CREATE TABLE raw_jobs (
     processing_error    TEXT
 );
 ```
+
+**Two Ingestion Modes:**
+
+| Mode | Input | What LLM Extracts |
+|------|-------|-------------------|
+| **Unstructured** | `job_description` only (pasted job posting) | Title, company, skills, requirements, salary, location, everything |
+| **Structured** | `job_description` + pre-parsed fields from Notion/Airtable | Normalizes and validates existing fields |
+
+`job_description` is always required. This flexibility allows ingesting jobs from any source - whether it's a copy-pasted LinkedIn posting or a structured Notion database.
 
 ### 3.2 Normalized Job Profile
 
@@ -817,7 +896,7 @@ CREATE INDEX idx_processing_log_time ON processing_log(started_at DESC);
 | **Universal Attributes** | CV text | 5 soft scores (1-5) with reasoning | leadership, autonomy, technical_depth, communication, growth_trajectory |
 | **Salary Parsing** | Raw salary string | min/max integers in USD | Handle formats: "$91K-$125K", "100k~120k" |
 | **Location Normalization** | Raw location string | city, country, region, timezone | "Malaysia" → ("Kuala Lumpur", "Malaysia", "Asia-Pacific") |
-| **Job Normalization** | Job description text | Structured job JSON | must_have/nice_to_have skills, seniority, min attribute scores |
+| **Job Normalization** | Raw job posting text OR structured fields | Structured job JSON | title, company, must_have/nice_to_have skills, seniority, min attribute scores |
 
 See [Skills Taxonomy System Proposal](./Skills%20Taxonomy%20System%20Proposal.md) for full prompt templates.
 
@@ -1007,7 +1086,42 @@ Common mappings needed:
 }
 ```
 
-### A.6 Example Job (Normalized with Soft Requirements)
+### A.6 Candidate Projects & Hackathons
+
+```json
+{
+  "projects": [
+    {
+      "project_name": "SolanaSwap DEX",
+      "description": "Built a decentralized exchange on Solana with AMM, limit orders, and real-time price charts. Handled 5K+ transactions during hackathon demo.",
+      "url": "https://github.com/candidate/solana-swap",
+      "technologies": ["Rust", "Anchor", "React", "TypeScript"],
+      "is_hackathon": true,
+      "hackathon_name": "Solana Grizzlython 2023",
+      "prize_won": "1st Place DeFi Track",
+      "prize_amount_usd": 10000,
+      "year": 2023
+    },
+    {
+      "project_name": "Multi-chain Portfolio Tracker",
+      "description": "Personal project tracking assets across 10+ chains with real-time prices, PnL calculations, and tax reporting.",
+      "url": "https://portfolio.example.com",
+      "technologies": ["Next.js", "TypeScript", "GraphQL"],
+      "is_hackathon": false,
+      "year": 2024
+    },
+    {
+      "project_name": "Open Source SDK Contribution",
+      "description": "Major contributor to Router Protocol SDK, added support for 15 new chains and improved documentation.",
+      "url": "https://github.com/router-protocol/sdk",
+      "technologies": ["TypeScript", "Node.js"],
+      "is_hackathon": false
+    }
+  ]
+}
+```
+
+### A.7 Example Job (Normalized with Soft Requirements)
 
 ```json
 {
@@ -1031,6 +1145,11 @@ Common mappings needed:
   "location_type": "remote"
 }
 ```
+
+**Note:** After discovery calls with clients, the normalized job fields above can be directly edited to incorporate additional insights. For example:
+- Add companies to target in `domain_experience`
+- Add specific skills mentioned in `must_have_skills` or `nice_to_have_skills`
+- Adjust `min_*_score` thresholds based on role requirements
 
 ---
 

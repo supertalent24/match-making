@@ -17,10 +17,11 @@ This document explains **what information we store** about candidates and jobs, 
 2. [Candidate Profile](#2-candidate-profile)
 3. [Skills & Ratings](#3-skills--ratings)
 4. [Work Experience](#4-work-experience)
-5. [Soft Attributes](#5-soft-attributes)
-6. [Job Requirements](#6-job-requirements)
-7. [Semantic Vectors (AI Matching)](#7-semantic-vectors-ai-matching)
-8. [How Matching Works](#8-how-matching-works)
+5. [Projects & Hackathons](#5-projects--hackathons)
+6. [Soft Attributes](#6-soft-attributes)
+7. [Job Requirements](#7-job-requirements)
+8. [Semantic Vectors (AI Matching)](#8-semantic-vectors-ai-matching)
+9. [How Matching Works](#9-how-matching-works)
 
 ---
 
@@ -36,10 +37,10 @@ We store information about candidates and jobs, then use a combination of **exac
 │  │  (basics)    │  │  (rated 1-5) │  │  (history)   │              │
 │  └──────────────┘  └──────────────┘  └──────────────┘              │
 │                                                                      │
-│  ┌──────────────┐  ┌──────────────┐                                 │
-│  │   Soft       │  │   GitHub     │                                 │
-│  │  Attributes  │  │   Metrics    │                                 │
-│  └──────────────┘  └──────────────┘                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
+│  │   Projects   │  │   Soft       │  │   GitHub     │              │
+│  │ (hackathons) │  │  Attributes  │  │   Metrics    │              │
+│  └──────────────┘  └──────────────┘  └──────────────┘              │
 └─────────────────────────────────────────────────────────────────────┘
                               ↓
                     [ MATCHING ENGINE ]
@@ -137,7 +138,43 @@ For each position in their career:
 
 ---
 
-## 5. Soft Attributes
+## 5. Projects & Hackathons
+
+Beyond jobs, we also track individual **projects** and **hackathon wins**. This is one of the three key artifacts of any CV: **Skills, Jobs, and Projects**.
+
+### Why Projects Matter
+
+| Candidate Type | What Projects Show |
+|----------------|-------------------|
+| **Tech** | Side projects, open source contributions, hackathon wins |
+| **Non-Tech** | Marketing campaigns, growth experiments, content portfolios |
+| **All** | Self-directed work, autonomy, passion outside day job |
+
+### What We Store Per Project
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Project Name** | Name of the project | "SolanaSwap DEX" |
+| **Description** | What they built | "Decentralized exchange with AMM..." |
+| **URL** | Link to project/repo | github.com/user/project |
+| **Technologies** | Tech stack used | ["Rust", "Anchor", "React"] |
+| **Is Hackathon?** | Was this a hackathon project? | Yes |
+| **Hackathon Name** | Name of the hackathon | "Solana Grizzlython 2023" |
+| **Prize Won** | What prize they received | "1st Place DeFi Track" |
+| **Prize Amount** | Prize money in USD | $10,000 |
+| **Year** | When it was built | 2023 |
+
+### Example: Candidate's Projects
+
+| Project | Type | Prize | Technologies |
+|---------|------|-------|--------------|
+| SolanaSwap DEX | 🏆 Hackathon | $10K - 1st Place | Rust, Anchor, React |
+| Multi-chain Portfolio Tracker | Side Project | — | Next.js, GraphQL |
+| Router SDK Contribution | Open Source | — | TypeScript, Node.js |
+
+---
+
+## 6. Soft Attributes
 
 These are **universal qualities** that matter for any job. The AI scores each candidate 1-5:
 
@@ -171,7 +208,7 @@ These are **universal qualities** that matter for any job. The AI scores each ca
 
 ---
 
-## 6. Job Requirements
+## 7. Job Requirements
 
 ### Basic Job Info
 
@@ -204,9 +241,22 @@ Jobs can specify minimum scores for soft attributes:
 | Communication | 3+ | "articulate ideas and collaborate" |
 | Growth | — | Not specified |
 
+### Enriching Jobs After Discovery Calls
+
+After a discovery call with the client, the team can **directly edit** the normalized job fields to incorporate additional insights:
+
+| What to Update | Example Change |
+|----------------|----------------|
+| **Must-Have Skills** | Add "HFT experience" if client emphasized it |
+| **Nice-to-Have Skills** | Add specific technologies mentioned |
+| **Domain Experience** | Add "Trading Platforms" or specific company backgrounds |
+| **Soft Attribute Minimums** | Increase leadership score if they need someone senior |
+
+This keeps the data model simple while allowing full flexibility to refine requirements.
+
 ---
 
-## 7. Semantic Vectors (AI Matching)
+## 8. Semantic Vectors (AI Matching)
 
 Beyond exact filters and scores, we use **AI-generated vectors** to find candidates who are *semantically similar* to what the job needs — even if the exact words don't match.
 
@@ -266,7 +316,7 @@ Vectors let us find the **right** candidates, not just the ones who used the exa
 
 ---
 
-## 8. How Matching Works
+## 9. How Matching Works
 
 When a job comes in, we find the best candidates in **three steps**:
 
@@ -331,6 +381,7 @@ Top 20-50 candidates ranked by match score, with breakdown showing:
 | **Profile** | Name, location, current role, seniority, years experience, salary expectations |
 | **Skills** | Each skill with rating (1-5), years, and best example |
 | **Experience** | Each job with company, title, years, and description |
+| **Projects** | Hackathons, side projects, open source with technologies and prizes |
 | **Soft Attributes** | 5 universal scores (leadership, autonomy, depth, communication, growth) |
 | **Vectors** | Experience, domain context, personality, per-position, per-skill |
 | **GitHub** | Username, repos, stars, languages |
@@ -341,8 +392,8 @@ Top 20-50 candidates ranked by match score, with breakdown showing:
 | Category | What We Store |
 |----------|---------------|
 | **Basics** | Title, company, seniority, employment type, location, salary |
-| **Skills** | Must-have list, nice-to-have list, domain experience |
-| **Soft Minimums** | Minimum scores for leadership, autonomy, etc. (optional) |
+| **Skills** | Must-have list, nice-to-have list, domain experience (editable after discovery calls) |
+| **Soft Minimums** | Minimum scores for leadership, autonomy, etc. (optional, adjustable) |
 | **Vectors** | Role description, domain context, culture |
 
 ---

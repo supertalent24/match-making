@@ -23,6 +23,7 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "pgvector>=0.2.4",
     "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
     
     # Utilities
     "python-dotenv>=1.0.0",
