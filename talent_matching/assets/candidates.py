@@ -116,6 +116,11 @@ def raw_candidates(
     required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
     code_version="1.3.0",  # Bump when prompt or normalization logic changes
+    op_tags={
+        # Limit concurrent OpenRouter API calls to avoid rate limits
+        # All assets sharing this key compete for the same concurrency slots
+        "dagster/concurrency_key": "openrouter_api",
+    },
     metadata={
         "table": "normalized_candidates",
         "llm_operation": "normalize_cv",
@@ -236,6 +241,11 @@ def normalized_candidates(
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
     code_version="1.0.0",  # Bump when embedding logic changes
+    op_tags={
+        # Limit concurrent OpenRouter API calls to avoid rate limits
+        # Shares concurrency pool with normalized_candidates
+        "dagster/concurrency_key": "openrouter_api",
+    },
     metadata={
         "table": "candidate_vectors",
         "vector_types": ["experience", "skills", "summary"],
