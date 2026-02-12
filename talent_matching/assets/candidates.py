@@ -23,7 +23,7 @@ from dagster import (
     asset,
 )
 
-from talent_matching.llm import normalize_cv
+from talent_matching.llm import embed_text, normalize_cv
 
 # Dynamic partition definition for candidates
 # Each candidate record gets its own partition key (Airtable record ID)
@@ -233,41 +233,117 @@ def normalized_candidates(
     ins={"normalized_candidates": AssetIn()},
     description="Semantic embeddings for candidate profiles",
     group_name="candidates",
+    required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
+    code_version="1.0.0",  # Bump when embedding logic changes
     metadata={
         "table": "candidate_vectors",
-        "vector_types": ["experience", "domain_context", "personality"],
+        "vector_types": ["experience", "skills", "summary"],
     },
 )
 def candidate_vectors(
     context: AssetExecutionContext,
     normalized_candidates: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Generate semantic embeddings for a candidate profile.
+    """Generate semantic embeddings for a candidate profile using OpenRouter.
 
-    Generates multiple vector types:
-    - experience: Concatenated experience across all roles
-    - domain_context: Industries and problem spaces
-    - personality: Work style and personality signals
+    Generates multiple vector types for different matching dimensions:
+    - experience: Concatenated work experience descriptions
+    - skills: Technical skills and domain expertise
+    - summary: Overall professional summary
 
-    For now, returns mock vector data.
+    Uses OpenRouter's embeddings API with text-embedding-3-small (1536 dims).
     """
     record_id = context.partition_key
-    context.log.info(f"Generating vectors for candidate: {record_id} (stub implementation)")
+    openrouter = context.resources.openrouter
 
-    # Mock vector output (actual vectors would be 1536-dimensional)
-    # TODO: Use embeddings resource for actual vector generation
+    # Fail fast if API key is not configured
+    if not os.getenv("OPENROUTER_API_KEY"):
+        raise ValueError(
+            "OPENROUTER_API_KEY environment variable is not set. "
+            "Set it in .env or export it before running the pipeline."
+        )
+
+    # Set context for cost tracking
+    openrouter.set_context(
+        run_id=context.run_id,
+        asset_key="candidate_vectors",
+        partition_key=record_id,
+    )
+
+    normalized_json = normalized_candidates.get("normalized_json", {})
+
+    # Build text for each vector type
+    texts_to_embed = {}
+
+    # Experience text: concatenate all work experience
+    experience_parts = []
+    for exp in normalized_json.get("experience", []):
+        exp_text = f"{exp.get('role', '')} at {exp.get('company', '')}"
+        if exp.get("description"):
+            exp_text += f": {exp['description']}"
+        if exp.get("technologies"):
+            exp_text += f" Technologies: {', '.join(exp['technologies'])}"
+        experience_parts.append(exp_text)
+    texts_to_embed["experience"] = (
+        " | ".join(experience_parts) if experience_parts else "No experience data"
+    )
+
+    # Skills text: combine all skill categories
+    skills = normalized_json.get("skills", {})
+    skills_parts = []
+    for category, skill_list in skills.items():
+        if skill_list:
+            skills_parts.append(f"{category}: {', '.join(skill_list)}")
+    texts_to_embed["skills"] = " | ".join(skills_parts) if skills_parts else "No skills data"
+
+    # Summary text: professional summary + current role + domains
+    summary_parts = []
+    if normalized_json.get("summary"):
+        summary_parts.append(normalized_json["summary"])
+    if normalized_json.get("current_role"):
+        summary_parts.append(f"Current role: {normalized_json['current_role']}")
+    if normalized_json.get("seniority_level"):
+        summary_parts.append(f"Seniority: {normalized_json['seniority_level']}")
+    if skills.get("domains"):
+        summary_parts.append(f"Domains: {', '.join(skills['domains'])}")
+    texts_to_embed["summary"] = " ".join(summary_parts) if summary_parts else "No summary data"
+
+    context.log.info(f"Generating embeddings for candidate: {record_id}")
+
+    # Batch embed all texts in a single API call
+    text_list = list(texts_to_embed.values())
+    vector_types = list(texts_to_embed.keys())
+
+    result = asyncio.run(embed_text(openrouter, text_list))
+
+    # Add metadata for cost tracking
+    context.add_output_metadata(
+        {
+            "embedding_cost_usd": result.cost_usd,
+            "embedding_tokens": result.input_tokens,
+            "embedding_dimensions": result.dimensions,
+            "embedding_model": result.model,
+            "vectors_generated": len(result.embeddings),
+        }
+    )
+
+    context.log.info(
+        f"Generated {len(result.embeddings)} vectors for candidate: {record_id} "
+        f"(cost: ${result.cost_usd:.6f}, dims: {result.dimensions}, model: {result.model})"
+    )
+
+    # Build output records
     vectors = []
-    for vector_type in ["experience", "domain_context", "personality"]:
+    for i, vector_type in enumerate(vector_types):
         vectors.append(
             {
                 "candidate_id": record_id,
                 "airtable_record_id": normalized_candidates.get("airtable_record_id"),
                 "vector_type": vector_type,
-                "vector": [0.1] * 1536,  # Mock 1536-dim vector
-                "model_version": "mock-embedding-v1",
+                "vector": result.embeddings[i],
+                "model_version": result.model,
             }
         )
 
-    context.log.info(f"Generated {len(vectors)} vectors for candidate: {record_id}")
     return vectors

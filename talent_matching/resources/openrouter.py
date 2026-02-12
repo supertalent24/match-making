@@ -235,3 +235,65 @@ class OpenRouterResource(ConfigurableResource):
         )
 
         return data
+
+    async def embed(
+        self,
+        input: str | list[str],
+        model: str = "openai/text-embedding-3-small",
+        operation: str = "embed",
+    ) -> dict[str, Any]:
+        """Generate embeddings using OpenRouter's embeddings API.
+
+        Reference: https://openrouter.ai/docs/api/reference/embeddings
+
+        Args:
+            input: Text or list of texts to embed
+            model: Embedding model to use
+            operation: Operation type for cost tracking
+
+        Returns:
+            Full API response dict including embeddings and usage
+        """
+        # Ensure input is a list for consistent handling
+        if isinstance(input, str):
+            input = [input]
+
+        request_body: dict[str, Any] = {
+            "model": model,
+            "input": input,
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": self.site_url,
+                    "X-Title": self.app_name,
+                },
+                json=request_body,
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # Extract usage from response
+        usage = data.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", usage.get("total_tokens", 0))
+        output_tokens = 0  # Embeddings don't have output tokens
+        cost_usd = Decimal(str(usage.get("cost", 0)))
+
+        # Log to Dagster
+        self._log_cost(operation, model, input_tokens, output_tokens, cost_usd)
+
+        # Store in database
+        await self._store_cost_record(
+            operation=operation,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+        )
+
+        return data

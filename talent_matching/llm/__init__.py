@@ -10,6 +10,13 @@ Each operation module exports:
 - The operation function that uses OpenRouterResource
 """
 
+from talent_matching.llm.operations.embed_text import (
+    PROMPT_VERSION as EMBED_PROMPT_VERSION,
+)
+from talent_matching.llm.operations.embed_text import (
+    EmbedTextResult,
+    embed_text,
+)
 from talent_matching.llm.operations.normalize_cv import (
     PROMPT_VERSION as CV_PROMPT_VERSION,
 )
@@ -45,4 +52,8 @@ __all__ = [
     "SCORE_PROMPT_VERSION",
     "ScoreCandidateResult",
     "score_candidate",
+    # Text embedding
+    "EMBED_PROMPT_VERSION",
+    "EmbedTextResult",
+    "embed_text",
 ]
