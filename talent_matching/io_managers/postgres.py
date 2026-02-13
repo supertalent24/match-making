@@ -559,10 +559,8 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             start_date = self._parse_date_string(exp.get("start_date"))
             end_date = self._parse_date_string(exp.get("end_date"))
 
-            # Determine is_current: explicit field OR no end_date
-            is_current = exp.get("is_current", False)
-            if end_date is None and start_date is not None:
-                is_current = True
+            # Determine is_current: no end_date means still employed there
+            is_current = end_date is None
 
             values = {
                 "id": uuid4(),
