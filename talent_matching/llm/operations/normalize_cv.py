@@ -16,9 +16,7 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = (
-    "2.0.0"  # v2.0.0: Aligned with database schema, added contact info, education, hackathons
-)
+PROMPT_VERSION = "2.2.0"  # v2.2.0: Added start_date/end_date to experience, years per skill
 
 # Default model for CV normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -40,14 +38,21 @@ SYSTEM_PROMPT = """You are a CV parser. Extract and normalize the following CV i
     "timezone": "Timezone like 'America/New_York' or null"
   },
 
-  "skills": ["All skills mentioned: programming languages, frameworks, tools, databases, platforms, etc."],
+  "skills": [
+    {
+      "name": "Skill name (e.g., 'Python', 'React', 'PostgreSQL')",
+      "years": <estimated years of experience with this skill or null>
+    }
+  ],
 
   "experience": [
     {
       "company": "Company name",
       "role": "Job title",
-      "duration_months": <number or null>,
-      "is_current": <true if current job, false otherwise>,
+      "start_date": "YYYY-MM format (e.g., '2023-03') or null",
+      "end_date": "YYYY-MM format or null if current job",
+      "duration_months": <calculated months between dates or estimated>,
+      "is_current": <true if no end_date/still working there>,
       "description": "Full description of responsibilities and achievements",
       "technologies": ["Tech used in this role..."]
     }
@@ -90,7 +95,8 @@ SYSTEM_PROMPT = """You are a CV parser. Extract and normalize the following CV i
 
 IMPORTANT:
 - Extract email and phone if present in the CV
-- skills is a FLAT LIST of all skills (languages, frameworks, tools, etc.)
+- skills is an array of objects with "name" and estimated "years" of experience
+- For experience dates, use YYYY-MM format (e.g., "2023-03"). Use null for end_date if current job
 - For social handles, extract just the username (e.g., "darshan9solanki" not "https://x.com/darshan9solanki")
 - Separate hackathons from general projects - hackathons have prizes/competitions
 - seniority_level must be uppercase: JUNIOR, MID, SENIOR, STAFF, or PRINCIPAL

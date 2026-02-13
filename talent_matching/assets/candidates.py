@@ -241,7 +241,7 @@ def normalized_candidates(
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
-    code_version="1.1.0",  # Bump when embedding logic changes
+    code_version="1.2.0",  # Bump when embedding logic changes
     op_tags={
         # Limit concurrent OpenRouter API calls to avoid rate limits
         # Shares concurrency pool with normalized_candidates
@@ -300,17 +300,20 @@ def candidate_vectors(
         " | ".join(experience_parts) if experience_parts else "No experience data"
     )
 
-    # Skills text: skills is now a flat list
+    # Skills text: skills is now a list of objects or strings
+    # Format: [{"name": "Python", "years": 3}, ...] or legacy ["Python", ...]
     skills = normalized_json.get("skills", [])
     if isinstance(skills, list) and skills:
-        texts_to_embed["skills"] = "Skills: " + ", ".join(skills)
-    elif isinstance(skills, dict):
-        # Backwards compatibility: handle old format with categories
-        skills_parts = []
-        for category, skill_list in skills.items():
-            if skill_list:
-                skills_parts.append(f"{category}: {', '.join(skill_list)}")
-        texts_to_embed["skills"] = " | ".join(skills_parts) if skills_parts else "No skills data"
+        skill_names = []
+        for s in skills:
+            if isinstance(s, dict):
+                skill_names.append(s.get("name", ""))
+            elif isinstance(s, str):
+                skill_names.append(s)
+        skill_names = [n for n in skill_names if n]
+        texts_to_embed["skills"] = (
+            "Skills: " + ", ".join(skill_names) if skill_names else "No skills data"
+        )
     else:
         texts_to_embed["skills"] = "No skills data"
 

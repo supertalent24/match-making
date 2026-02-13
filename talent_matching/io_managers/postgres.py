@@ -5,6 +5,7 @@ using SQLAlchemy models for type safety and consistency.
 """
 
 import json
+from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -150,6 +151,28 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             return int(numbers[0]), int(numbers[0]), currency
 
         return None, None, currency
+
+    def _parse_date_string(self, date_str: str | None) -> date | None:
+        """Parse YYYY-MM or YYYY-MM-DD date string to Python date.
+
+        Args:
+            date_str: Date string in YYYY-MM or YYYY-MM-DD format
+
+        Returns:
+            Python date object (defaults to 1st of month for YYYY-MM) or None
+        """
+        if not date_str:
+            return None
+
+        # Handle YYYY-MM format (default to 1st of month)
+        if len(date_str) == 7 and date_str[4] == "-":
+            return date(int(date_str[:4]), int(date_str[5:7]), 1)
+
+        # Handle YYYY-MM-DD format
+        if len(date_str) == 10 and date_str[4] == "-" and date_str[7] == "-":
+            return date(int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10]))
+
+        return None
 
     def _get_table_name(self, context: OutputContext | InputContext) -> str:
         """Derive table name from asset key."""
@@ -324,9 +347,13 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         # Extract the LLM-normalized data from the nested structure
         normalized_json = data.get("normalized_json", {})
 
-        # Skills is now a flat list
+        # Skills is now a list of objects: [{"name": "Python", "years": 3}, ...]
+        # Also support legacy flat list format: ["Python", ...]
         skills = normalized_json.get("skills", [])
-        skills_list = skills if isinstance(skills, list) else []
+        if isinstance(skills, list):
+            skills_list = [s.get("name") if isinstance(s, dict) else s for s in skills if s]
+        else:
+            skills_list = []
 
         # Extract location fields from nested structure
         location = normalized_json.get("location", {})
@@ -528,14 +555,25 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             duration_months = exp.get("duration_months")
             years_exp = duration_months / 12.0 if duration_months else None
 
+            # Parse dates from YYYY-MM format
+            start_date = self._parse_date_string(exp.get("start_date"))
+            end_date = self._parse_date_string(exp.get("end_date"))
+
+            # Determine is_current: explicit field OR no end_date
+            is_current = exp.get("is_current", False)
+            if end_date is None and start_date is not None:
+                is_current = True
+
             values = {
                 "id": uuid4(),
                 "airtable_record_id": f"{partition_key}_exp_{order}",
                 "candidate_id": candidate_id,
                 "company_name": exp.get("company"),
                 "position_title": exp.get("role"),
+                "start_date": start_date,
+                "end_date": end_date,
                 "years_experience": years_exp,
-                "is_current": exp.get("is_current", False),  # Use LLM-provided field
+                "is_current": is_current,
                 "description": exp.get("description"),
                 "skills_used": exp.get("technologies"),
                 "position_order": order,
@@ -558,7 +596,8 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
     ) -> None:
         """Store skills from LLM response, creating skill entries as needed.
 
-        LLM returns skills as a flat list: ["Python", "React", "PostgreSQL", ...]
+        LLM v2.2.0+ returns skills as: [{"name": "Python", "years": 3}, ...]
+        Also supports legacy flat list format: ["Python", "React", ...]
         """
         if not skills or not isinstance(skills, list):
             return
@@ -567,8 +606,18 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         session.execute(delete(CandidateSkill).where(CandidateSkill.candidate_id == candidate_id))
 
         skills_stored = 0
-        for skill_name in skills:
-            if not skill_name or not isinstance(skill_name, str):
+        for skill_item in skills:
+            # Handle both new format (dict) and legacy format (string)
+            if isinstance(skill_item, dict):
+                skill_name = skill_item.get("name")
+                years = skill_item.get("years")
+            elif isinstance(skill_item, str):
+                skill_name = skill_item
+                years = None
+            else:
+                continue
+
+            if not skill_name:
                 continue
 
             # Get or create the skill in the skills table
@@ -582,6 +631,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
                 "candidate_id": candidate_id,
                 "skill_id": skill_id,
                 "rating": 3,  # Default mid-range rating
+                "years_experience": int(years) if years else None,
                 "rating_model": model_version,
             }
 
