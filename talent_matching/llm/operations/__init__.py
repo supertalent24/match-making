@@ -6,6 +6,14 @@ Each module contains:
 - An async function that performs the operation
 """
 
+from talent_matching.llm.operations.extract_pdf import (
+    PROMPT_VERSION as PDF_PROMPT_VERSION,
+)
+from talent_matching.llm.operations.extract_pdf import (
+    PDFEngine,
+    extract_pdf_from_url,
+    extract_pdf_text,
+)
 from talent_matching.llm.operations.normalize_cv import (
     PROMPT_VERSION as CV_PROMPT_VERSION,
 )
@@ -32,4 +40,8 @@ __all__ = [
     "normalize_job",
     "SCORE_PROMPT_VERSION",
     "score_candidate",
+    "PDF_PROMPT_VERSION",
+    "PDFEngine",
+    "extract_pdf_text",
+    "extract_pdf_from_url",
 ]

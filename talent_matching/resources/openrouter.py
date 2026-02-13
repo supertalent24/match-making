@@ -172,6 +172,7 @@ class OpenRouterResource(ConfigurableResource):
         response_format: dict[str, str] | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        plugins: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Make an async completion request and track costs.
 
@@ -182,6 +183,7 @@ class OpenRouterResource(ConfigurableResource):
             response_format: Response format (e.g., {"type": "json_object"})
             temperature: Sampling temperature (0.0 = deterministic)
             max_tokens: Maximum tokens in response
+            plugins: OpenRouter plugins config (e.g., for PDF processing engine)
 
         Returns:
             Full API response dict including usage information
@@ -199,6 +201,9 @@ class OpenRouterResource(ConfigurableResource):
 
         if max_tokens:
             request_body["max_tokens"] = max_tokens
+
+        if plugins:
+            request_body["plugins"] = plugins
 
         async with httpx.AsyncClient() as client:
             response = await client.post(

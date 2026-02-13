@@ -149,7 +149,11 @@ class PgVectorIOManager(ConfigurableIOManager):
         }
 
     def _store_candidate_vectors(self, context: OutputContext, data: Any) -> None:
-        """Store candidate embedding vectors using SQLAlchemy ORM."""
+        """Store candidate embedding vectors using SQLAlchemy ORM.
+
+        Deletes all existing vectors for the candidate before inserting new ones.
+        This ensures old vector types are removed when re-materializing.
+        """
         session = self._get_session()
         partition_key = context.partition_key
 
@@ -162,6 +166,17 @@ class PgVectorIOManager(ConfigurableIOManager):
             context.log.error(f"Raw candidate not found for: {partition_key}")
             session.close()
             return
+
+        # Delete all existing vectors for this candidate before inserting new ones
+        # This removes legacy vector types when re-materializing
+        deleted = session.execute(
+            CandidateVector.__table__.delete().where(
+                CandidateVector.candidate_id == raw_candidate.id
+            )
+        )
+        deleted_count = deleted.rowcount
+        if deleted_count > 0:
+            context.log.info(f"Deleted {deleted_count} existing vectors for: {partition_key}")
 
         # Handle single dict or list of dicts
         records = data if isinstance(data, list) else [data]
@@ -178,7 +193,6 @@ class PgVectorIOManager(ConfigurableIOManager):
                 "model_version": record.get("model_version", "unknown"),
             }
 
-            # Insert new vector (we could also upsert by candidate_id + vector_type)
             stmt = insert(CandidateVector).values(**values)
             session.execute(stmt)
 
@@ -187,7 +201,11 @@ class PgVectorIOManager(ConfigurableIOManager):
         context.log.info(f"Stored {len(records)} candidate vectors for: {partition_key}")
 
     def _store_job_vectors(self, context: OutputContext, data: Any) -> None:
-        """Store job embedding vectors using SQLAlchemy ORM."""
+        """Store job embedding vectors using SQLAlchemy ORM.
+
+        Deletes all existing vectors for the job before inserting new ones.
+        This ensures old vector types are removed when re-materializing.
+        """
         session = self._get_session()
         partition_key = context.partition_key if hasattr(context, "partition_key") else None
         record_id = (
@@ -205,6 +223,15 @@ class PgVectorIOManager(ConfigurableIOManager):
             context.log.error(f"Raw job not found for: {record_id}")
             session.close()
             return
+
+        # Delete all existing vectors for this job before inserting new ones
+        # This removes legacy vector types when re-materializing
+        deleted = session.execute(
+            JobVector.__table__.delete().where(JobVector.job_id == raw_job.id)
+        )
+        deleted_count = deleted.rowcount
+        if deleted_count > 0:
+            context.log.info(f"Deleted {deleted_count} existing vectors for job: {record_id}")
 
         records = data if isinstance(data, list) else [data]
 

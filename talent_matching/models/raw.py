@@ -3,12 +3,12 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Enum, String, Text, func
+from sqlalchemy import DateTime, Enum, Float, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from talent_matching.models.base import Base
-from talent_matching.models.enums import ProcessingStatusEnum
+from talent_matching.models.enums import CVExtractionMethodEnum, ProcessingStatusEnum
 
 
 class RawCandidate(Base):
@@ -19,12 +19,8 @@ class RawCandidate(Base):
 
     __tablename__ = "raw_candidates"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Source tracking
     source: Mapped[str] = mapped_column(
@@ -38,7 +34,24 @@ class RawCandidate(Base):
     desired_job_categories_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     skills_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     cv_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    cv_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cv_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # Original from Airtable
+    cv_text_pdf: Mapped[str | None] = mapped_column(Text, nullable=True)  # Extracted from PDF
+
+    # CV extraction metadata (for PDF processing)
+    cv_extraction_method: Mapped[CVExtractionMethodEnum | None] = mapped_column(
+        Enum(CVExtractionMethodEnum, name="cv_extraction_method_enum"),
+        nullable=True,
+    )  # How cv_text_pdf was obtained: pdf_text, mistral_ocr, native, failed
+    cv_extraction_cost_usd: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # Cost of PDF extraction
+    cv_extraction_model: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )  # Model used for extraction (e.g., "openai/gpt-4o-mini")
+    cv_extraction_pages: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )  # Number of pages in the PDF
+
     professional_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     proof_of_work: Mapped[str | None] = mapped_column(Text, nullable=True)
     salary_range_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -68,24 +81,20 @@ class RawJob(Base):
     """Raw job description as imported from external sources.
 
     Stores the original job data before normalization.
-    
+
     Supports two ingestion modes:
     1. **Unstructured**: Only `job_description` is provided (e.g., pasted job posting).
        LLM extracts title, company, skills, requirements, etc.
     2. **Structured**: Pre-parsed fields from Notion/Airtable with `job_title`, `company_name`, etc.
-    
+
     The normalization pipeline handles both - if only job_description is present,
     all fields are extracted by the LLM.
     """
 
     __tablename__ = "raw_jobs"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Source tracking
     source: Mapped[str] = mapped_column(
@@ -121,9 +130,7 @@ class RawJob(Base):
     work_setup_raw: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # "Remote", "Hybrid", "On-Site" (multi-select JSON array)
-    status_raw: Mapped[str | None] = mapped_column(
-        Text, nullable=True
-    )  # "Active", "Closed"
+    status_raw: Mapped[str | None] = mapped_column(Text, nullable=True)  # "Active", "Closed"
     job_category_raw: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # "Frontend Engineer", etc. (multi-select JSON array)

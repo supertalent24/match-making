@@ -12,6 +12,16 @@ class ProcessingStatusEnum(str, enum.Enum):
     FAILED = "failed"
 
 
+class CVExtractionMethodEnum(str, enum.Enum):
+    """How CV text was obtained."""
+
+    AIRTABLE = "airtable"  # Text was already in Airtable
+    PDF_TEXT = "pdf_text"  # Extracted via OpenRouter pdf-text engine (free)
+    MISTRAL_OCR = "mistral_ocr"  # Extracted via OpenRouter mistral-ocr ($2/1000 pages)
+    NATIVE = "native"  # Model's native PDF processing
+    FAILED = "failed"  # Extraction attempted but failed
+
+
 class SeniorityEnum(str, enum.Enum):
     """Career seniority levels."""
 

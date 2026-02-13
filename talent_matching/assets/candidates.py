@@ -2,7 +2,7 @@
 
 This module defines the asset graph for processing candidate data:
 1. airtable_candidates: Candidates fetched from Airtable (partitioned per record)
-2. raw_candidates: Raw candidate data stored in PostgreSQL
+2. raw_candidates: Raw candidate data stored in PostgreSQL (with PDF extraction)
 3. normalized_candidates: LLM-normalized structured profiles
 4. candidate_vectors: Semantic embeddings for matching
 
@@ -23,7 +23,7 @@ from dagster import (
     asset,
 )
 
-from talent_matching.llm import embed_text, normalize_cv
+from talent_matching.llm import PDFEngine, embed_text, extract_pdf_from_url, normalize_cv
 
 # Dynamic partition definition for candidates
 # Each candidate record gets its own partition key (Airtable record ID)
@@ -70,9 +70,14 @@ def airtable_candidates(context: AssetExecutionContext) -> Output[dict[str, Any]
 @asset(
     partitions_def=candidate_partitions,
     ins={"airtable_candidates": AssetIn()},
-    description="Raw candidate data stored in PostgreSQL",
+    description="Raw candidate data with PDF extraction (always extracts when cv_url exists)",
     group_name="candidates",
     io_manager_key="postgres_io",
+    required_resource_keys={"openrouter"},
+    code_version="1.2.0",  # v1.2.0: Always extract PDF, store both cv_text and cv_text_pdf
+    op_tags={
+        "dagster/concurrency_key": "openrouter_api",
+    },
     metadata={
         "table": "raw_candidates",
     },
@@ -81,28 +86,109 @@ def raw_candidates(
     context: AssetExecutionContext,
     airtable_candidates: dict[str, Any],
 ) -> dict[str, Any]:
-    """Store raw candidate data in PostgreSQL.
+    """Store raw candidate data with PDF text extraction.
 
-    This asset receives candidate data from Airtable and prepares it
-    for storage in the raw_candidates table. The postgres_io manager
-    handles the actual database insertion/update.
+    This asset:
+    1. Preserves original cv_text from Airtable (if any)
+    2. ALWAYS extracts text from cv_url PDF (if available)
+    3. Stores both separately: cv_text (Airtable) + cv_text_pdf (extracted)
 
-    The partition key (Airtable record ID) ensures each candidate
-    is processed independently.
+    The normalization step will merge both sources to capture all information.
+    PDF extraction uses OpenRouter's pdf-text engine (free) with GPT-4o-mini.
     """
     record_id = context.partition_key
-    context.log.info(f"Storing raw candidate: {record_id}")
+    openrouter = context.resources.openrouter
+    context.log.info(f"Processing raw candidate: {record_id}")
 
-    # The airtable_candidates data is already mapped to our model fields
-    # Just pass it through to the IO manager
+    # Preserve original Airtable cv_text
+    cv_text_airtable = airtable_candidates.get("cv_text")
+    cv_text_pdf = None
+
+    # Initialize extraction metadata
+    cv_extraction_method = None
+    cv_extraction_cost_usd = None
+    cv_extraction_model = None
+    cv_extraction_pages = None
+
+    # Always extract from PDF if cv_url exists
+    cv_url = airtable_candidates.get("cv_url")
+
+    if cv_url:
+        context.log.info(f"Extracting text from PDF: {cv_url[:60]}...")
+
+        # Set context for cost tracking
+        openrouter.set_context(
+            run_id=context.run_id,
+            asset_key="raw_candidates",
+            partition_key=record_id,
+        )
+
+        # Extract text using OpenRouter
+        result = asyncio.run(
+            extract_pdf_from_url(
+                openrouter,
+                cv_url,
+                model="openai/gpt-4o-mini",
+                pdf_engine=PDFEngine.PDF_TEXT,  # Free engine
+            )
+        )
+
+        cv_extraction_cost_usd = result.cost_usd
+        cv_extraction_model = result.model
+        cv_extraction_pages = result.pages_processed
+
+        # Check if extraction succeeded
+        if result.text and len(result.text.strip()) > 50:
+            cv_text_pdf = result.text
+            cv_extraction_method = "pdf_text"
+            context.log.info(
+                f"PDF extraction successful: {len(cv_text_pdf)} chars, "
+                f"${result.cost_usd:.6f}, {result.pages_processed} pages"
+            )
+        else:
+            cv_extraction_method = "failed"
+            context.log.warning(f"PDF extraction returned empty/short text for {record_id}")
+
+        # Add extraction metadata to output
+        context.add_output_metadata(
+            {
+                "cv_extraction_method": cv_extraction_method,
+                "cv_extraction_cost_usd": cv_extraction_cost_usd or 0,
+                "cv_extraction_model": cv_extraction_model or "none",
+                "cv_extraction_pages": cv_extraction_pages or 0,
+                "cv_text_pdf_length": len(cv_text_pdf) if cv_text_pdf else 0,
+                "cv_text_airtable_length": len(cv_text_airtable) if cv_text_airtable else 0,
+            }
+        )
+    else:
+        context.log.info("No cv_url available for PDF extraction")
+
+    # Build raw data for storage
     raw_data = {
         **airtable_candidates,
-        # Ensure required fields have defaults
         "source": airtable_candidates.get("source", "airtable"),
+        # Keep original Airtable cv_text
+        "cv_text": cv_text_airtable,
+        # Add extracted PDF text separately
+        "cv_text_pdf": cv_text_pdf,
+        # Add extraction metadata
+        "cv_extraction_method": cv_extraction_method,
+        "cv_extraction_cost_usd": cv_extraction_cost_usd,
+        "cv_extraction_model": cv_extraction_model,
+        "cv_extraction_pages": cv_extraction_pages,
     }
 
+    has_airtable = bool(cv_text_airtable and len(cv_text_airtable.strip()) > 50)
+    has_pdf = bool(cv_text_pdf and len(cv_text_pdf.strip()) > 50)
+    sources = []
+    if has_airtable:
+        sources.append("airtable")
+    if has_pdf:
+        sources.append("pdf")
+
     context.log.info(
-        f"Raw candidate data ready for storage: {raw_data.get('full_name', 'Unknown')}"
+        f"Raw candidate ready: {raw_data.get('full_name', 'Unknown')} "
+        f"(sources: {', '.join(sources) if sources else 'none'})"
     )
 
     return raw_data
@@ -111,14 +197,12 @@ def raw_candidates(
 @asset(
     partitions_def=candidate_partitions,
     ins={"raw_candidates": AssetIn()},
-    description="LLM-normalized candidate profiles with structured fields",
+    description="LLM-normalized candidate profiles (merges Airtable + PDF sources)",
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
-    code_version="1.4.0",  # Bump when prompt or normalization logic changes
+    code_version="2.0.0",  # v2.0.0: Add narratives for pure prose vectorization
     op_tags={
-        # Limit concurrent OpenRouter API calls to avoid rate limits
-        # All assets sharing this key compete for the same concurrency slots
         "dagster/concurrency_key": "openrouter_api",
     },
     metadata={
@@ -132,14 +216,12 @@ def normalized_candidates(
 ) -> dict[str, Any]:
     """Normalize raw candidate data into structured profiles using LLM.
 
-    Uses OpenRouter API via talent_matching.llm operations to:
-    1. Send raw CV text to the LLM for normalization
-    2. Extract structured fields (skills, experience, education, etc.)
-    3. Track token usage and costs per request
-    4. Store both the normalized data and versioning metadata
+    Supports dual-source CV extraction:
+    - cv_text: Original text from Airtable (may include manually curated info)
+    - cv_text_pdf: Text extracted from PDF attachment
 
-    The code_version in the decorator tracks when this asset's logic changes.
-    Bump it when modifying prompt handling or normalization logic.
+    When both sources are available, the LLM merges them to create
+    a comprehensive profile that captures ALL available information.
     """
     record_id = context.partition_key
     openrouter = context.resources.openrouter
@@ -151,28 +233,47 @@ def normalized_candidates(
         partition_key=record_id,
     )
 
-    # Build CV text from available raw data
-    cv_parts = []
+    # Build Airtable text from ALL available raw fields
+    airtable_parts = []
     if raw_candidates.get("full_name"):
-        cv_parts.append(f"Name: {raw_candidates['full_name']}")
+        airtable_parts.append(f"Name: {raw_candidates['full_name']}")
     if raw_candidates.get("professional_summary"):
-        cv_parts.append(f"Summary: {raw_candidates['professional_summary']}")
+        airtable_parts.append(f"Summary: {raw_candidates['professional_summary']}")
     if raw_candidates.get("skills_raw"):
-        cv_parts.append(f"Skills: {raw_candidates['skills_raw']}")
+        airtable_parts.append(f"Skills: {raw_candidates['skills_raw']}")
     if raw_candidates.get("work_experience_raw"):
-        cv_parts.append(f"Experience: {raw_candidates['work_experience_raw']}")
+        airtable_parts.append(f"Experience: {raw_candidates['work_experience_raw']}")
     if raw_candidates.get("cv_text"):
-        cv_parts.append(f"CV Content:\n{raw_candidates['cv_text']}")
+        airtable_parts.append(f"CV Content:\n{raw_candidates['cv_text']}")
     if raw_candidates.get("location_raw"):
-        cv_parts.append(f"Location: {raw_candidates['location_raw']}")
+        airtable_parts.append(f"Location: {raw_candidates['location_raw']}")
     if raw_candidates.get("proof_of_work"):
-        cv_parts.append(f"Proof of Work: {raw_candidates['proof_of_work']}")
+        airtable_parts.append(f"Proof of Work: {raw_candidates['proof_of_work']}")
+    if raw_candidates.get("desired_job_categories_raw"):
+        airtable_parts.append(f"Desired Roles: {raw_candidates['desired_job_categories_raw']}")
+    if raw_candidates.get("salary_range_raw"):
+        airtable_parts.append(f"Salary Expectations: {raw_candidates['salary_range_raw']}")
+    # Social profiles (helps LLM extract handles)
+    if raw_candidates.get("github_url"):
+        airtable_parts.append(f"GitHub: {raw_candidates['github_url']}")
+    if raw_candidates.get("linkedin_url"):
+        airtable_parts.append(f"LinkedIn: {raw_candidates['linkedin_url']}")
+    if raw_candidates.get("x_profile_url"):
+        airtable_parts.append(f"Twitter/X: {raw_candidates['x_profile_url']}")
+    if raw_candidates.get("earn_profile_url"):
+        airtable_parts.append(f"Earn Profile: {raw_candidates['earn_profile_url']}")
 
-    cv_text = "\n\n".join(cv_parts)
+    cv_text_airtable = "\n\n".join(airtable_parts) if airtable_parts else None
 
-    if not cv_text.strip():
+    # Get PDF-extracted text (separate source)
+    cv_text_pdf = raw_candidates.get("cv_text_pdf")
+
+    # Check if we have any content
+    has_airtable = cv_text_airtable and len(cv_text_airtable.strip()) > 50
+    has_pdf = cv_text_pdf and len(cv_text_pdf.strip()) > 50
+
+    if not has_airtable and not has_pdf:
         context.log.warning(f"No CV data available for candidate: {record_id}")
-        # Add metadata for skipped LLM call
         context.add_output_metadata(
             {
                 "llm_cost_usd": 0.0,
@@ -180,9 +281,9 @@ def normalized_candidates(
                 "llm_tokens_output": 0,
                 "llm_model": "skipped",
                 "skip_reason": "no_cv_data",
+                "cv_sources": "none",
             }
         )
-        # Return minimal normalized data for candidates without CV text
         return {
             "candidate_id": record_id,
             "airtable_record_id": raw_candidates.get("airtable_record_id"),
@@ -197,7 +298,15 @@ def normalized_candidates(
             "model_version": None,
         }
 
-    context.log.info(f"Normalizing candidate: {record_id} via OpenRouter API")
+    # Log which sources we're using
+    sources = []
+    if has_airtable:
+        sources.append("airtable")
+    if has_pdf:
+        sources.append("pdf")
+    context.log.info(
+        f"Normalizing candidate {record_id} via OpenRouter API " f"(sources: {', '.join(sources)})"
+    )
 
     # Fail fast if API key is not configured
     if not os.getenv("OPENROUTER_API_KEY"):
@@ -206,8 +315,14 @@ def normalized_candidates(
             "Set it in .env or export it before running the pipeline."
         )
 
-    # Call the normalize_cv operation (prompt lives in talent_matching.llm.operations)
-    result = asyncio.run(normalize_cv(openrouter, cv_text))
+    # Call normalize_cv with BOTH sources - it will merge them
+    result = asyncio.run(
+        normalize_cv(
+            openrouter,
+            raw_cv_text=cv_text_airtable,
+            cv_text_pdf=cv_text_pdf,
+        )
+    )
 
     # Add LLM cost metadata to the materialization (visible in Dagster UI)
     context.add_output_metadata(
@@ -217,12 +332,14 @@ def normalized_candidates(
             "llm_tokens_output": result.output_tokens,
             "llm_tokens_total": result.total_tokens,
             "llm_model": result.model,
+            "cv_sources": ", ".join(sources),
         }
     )
 
     context.log.info(
         f"Normalized candidate: {result.data.get('name', 'Unknown')} "
-        f"(cost: ${result.cost_usd:.6f}, tokens: {result.total_tokens}, model: {result.model})"
+        f"(sources: {', '.join(sources)}, cost: ${result.cost_usd:.6f}, "
+        f"tokens: {result.total_tokens})"
     )
 
     return {
@@ -234,14 +351,34 @@ def normalized_candidates(
     }
 
 
+# Proficiency level mapping (1-10 to qualitative names)
+PROFICIENCY_LEVELS = {
+    1: "Novice",
+    2: "Beginner",
+    3: "Elementary",
+    4: "Developing",
+    5: "Competent",
+    6: "Proficient",
+    7: "Advanced",
+    8: "Expert",
+    9: "Master",
+    10: "World-class",
+}
+
+
+def _get_proficiency_label(score: int) -> str:
+    """Convert numeric proficiency (1-10) to qualitative label."""
+    return PROFICIENCY_LEVELS.get(score, "Unknown")
+
+
 @asset(
     partitions_def=candidate_partitions,
     ins={"normalized_candidates": AssetIn()},
-    description="Semantic embeddings for candidate profiles",
+    description="Semantic embeddings for candidate profiles (narratives + skills + positions + projects)",
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
-    code_version="1.2.0",  # Bump when embedding logic changes
+    code_version="4.0.0",  # v4.0.0: Added skill, position, project vectors
     op_tags={
         # Limit concurrent OpenRouter API calls to avoid rate limits
         # Shares concurrency pool with normalized_candidates
@@ -249,7 +386,16 @@ def normalized_candidates(
     },
     metadata={
         "table": "candidate_vectors",
-        "vector_types": ["experience", "skills", "summary"],
+        "vector_types": [
+            "experience",
+            "domain",
+            "personality",
+            "impact",
+            "technical",
+            "skill_*",
+            "position_*",
+            "project_*",
+        ],
     },
 )
 def candidate_vectors(
@@ -258,10 +404,24 @@ def candidate_vectors(
 ) -> list[dict[str, Any]]:
     """Generate semantic embeddings for a candidate profile using OpenRouter.
 
-    Generates multiple vector types for different matching dimensions:
-    - experience: Concatenated work experience descriptions
-    - skills: Technical skills and domain expertise
-    - summary: Overall professional summary
+    Generates multiple vector types:
+
+    **Narrative vectors** (pure LLM-generated prose):
+    - experience: Career journey, roles, progression
+    - domain: Industries, markets, ecosystems, protocols
+    - personality: Work style, values, culture fit signals
+    - impact: Scope, ownership, scale, measurable outcomes
+    - technical: Systems thinking, architecture, deep expertise
+
+    **Skill vectors** (one per skill):
+    - skill_{name}: "{Skill}: {Proficiency Level} - {Evidence}"
+    - Uses structured format for precise skill matching
+
+    **Position vectors** (one per job):
+    - position_{index}: Job description/responsibilities
+
+    **Project vectors** (one per project):
+    - project_{index}: Description + technologies
 
     Uses OpenRouter's embeddings API with text-embedding-3-small (1536 dims).
     """
@@ -283,51 +443,70 @@ def candidate_vectors(
     )
 
     normalized_json = normalized_candidates.get("normalized_json", {})
+    narratives = normalized_json.get("narratives", {})
 
-    # Build text for each vector type
+    # ═══════════════════════════════════════════════════════════════════
+    # NARRATIVE VECTORS (pure prose)
+    # ═══════════════════════════════════════════════════════════════════
     texts_to_embed = {}
 
-    # Experience text: concatenate all work experience
-    experience_parts = []
-    for exp in normalized_json.get("experience", []):
-        exp_text = f"{exp.get('role', '')} at {exp.get('company', '')}"
-        if exp.get("description"):
-            exp_text += f": {exp['description']}"
-        if exp.get("technologies"):
-            exp_text += f" Technologies: {', '.join(exp['technologies'])}"
-        experience_parts.append(exp_text)
-    texts_to_embed["experience"] = (
-        " | ".join(experience_parts) if experience_parts else "No experience data"
-    )
+    texts_to_embed["experience"] = narratives.get("experience") or "No experience narrative"
+    texts_to_embed["domain"] = narratives.get("domain") or "No domain narrative"
+    texts_to_embed["personality"] = narratives.get("personality") or "No personality narrative"
+    texts_to_embed["impact"] = narratives.get("impact") or "No impact narrative"
+    texts_to_embed["technical"] = narratives.get("technical") or "No technical narrative"
 
-    # Skills text: skills is now a list of objects or strings
-    # Format: [{"name": "Python", "years": 3}, ...] or legacy ["Python", ...]
+    # ═══════════════════════════════════════════════════════════════════
+    # SKILL VECTORS (structured: "Skill: Level - Evidence")
+    # ═══════════════════════════════════════════════════════════════════
     skills = normalized_json.get("skills", [])
-    if isinstance(skills, list) and skills:
-        skill_names = []
-        for s in skills:
-            if isinstance(s, dict):
-                skill_names.append(s.get("name", ""))
-            elif isinstance(s, str):
-                skill_names.append(s)
-        skill_names = [n for n in skill_names if n]
-        texts_to_embed["skills"] = (
-            "Skills: " + ", ".join(skill_names) if skill_names else "No skills data"
-        )
-    else:
-        texts_to_embed["skills"] = "No skills data"
+    for skill in skills:
+        skill_name = skill.get("name", "Unknown")
+        proficiency = skill.get("proficiency", 5)
+        evidence = skill.get("evidence", "")
 
-    # Summary text: professional summary + current role + domains
-    summary_parts = []
-    if normalized_json.get("summary"):
-        summary_parts.append(normalized_json["summary"])
-    if normalized_json.get("current_role"):
-        summary_parts.append(f"Current role: {normalized_json['current_role']}")
-    if normalized_json.get("seniority_level"):
-        summary_parts.append(f"Seniority: {normalized_json['seniority_level']}")
-    texts_to_embed["summary"] = " ".join(summary_parts) if summary_parts else "No summary data"
+        # Build structured skill text
+        level_label = _get_proficiency_label(proficiency)
+        skill_text = f"{skill_name}: {level_label} - {evidence}"
 
-    context.log.info(f"Generating embeddings for candidate: {record_id}")
+        # Use sanitized skill name as key (lowercase, no spaces)
+        skill_key = f"skill_{skill_name.lower().replace(' ', '_').replace('.', '')}"
+        texts_to_embed[skill_key] = skill_text
+
+    # ═══════════════════════════════════════════════════════════════════
+    # POSITION VECTORS (job descriptions)
+    # ═══════════════════════════════════════════════════════════════════
+    experiences = normalized_json.get("experience", [])
+    for i, exp in enumerate(experiences):
+        description = exp.get("description", "")
+        if description:
+            # Include role context for better semantic matching
+            role = exp.get("role", "")
+            company = exp.get("company", "")
+            position_text = f"{role} at {company}: {description}" if role else description
+            texts_to_embed[f"position_{i}"] = position_text
+
+    # ═══════════════════════════════════════════════════════════════════
+    # PROJECT VECTORS (description + technologies)
+    # ═══════════════════════════════════════════════════════════════════
+    projects = normalized_json.get("projects", [])
+    for i, proj in enumerate(projects):
+        description = proj.get("description", "")
+        technologies = proj.get("technologies", [])
+        name = proj.get("name", "")
+
+        if description or technologies:
+            # Concat description + technologies
+            tech_str = ", ".join(technologies) if technologies else ""
+            project_text = f"{name}: {description}"
+            if tech_str:
+                project_text += f" Technologies: {tech_str}"
+            texts_to_embed[f"project_{i}"] = project_text
+
+    context.log.info(
+        f"Generating {len(texts_to_embed)} embeddings for candidate: {record_id} "
+        f"(5 narratives, {len(skills)} skills, {len(experiences)} positions, {len(projects)} projects)"
+    )
 
     # Batch embed all texts in a single API call
     text_list = list(texts_to_embed.values())
@@ -343,6 +522,12 @@ def candidate_vectors(
             "embedding_dimensions": result.dimensions,
             "embedding_model": result.model,
             "vectors_generated": len(result.embeddings),
+            "narrative_vectors": 5,
+            "skill_vectors": len(skills),
+            "position_vectors": len([e for e in experiences if e.get("description")]),
+            "project_vectors": len(
+                [p for p in projects if p.get("description") or p.get("technologies")]
+            ),
         }
     )
 

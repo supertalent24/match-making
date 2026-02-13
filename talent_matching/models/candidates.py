@@ -17,7 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from talent_matching.models.base import Base
@@ -32,12 +32,8 @@ class NormalizedCandidate(Base):
 
     __tablename__ = "normalized_candidates"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     raw_candidate_id: Mapped[UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("raw_candidates.id", ondelete="CASCADE"),
@@ -72,21 +68,15 @@ class NormalizedCandidate(Base):
     # ═══════════════════════════════════════════════════════════════════
     # ARRAYS (Multiple Select in Airtable)
     # ═══════════════════════════════════════════════════════════════════
-    desired_job_categories: Mapped[list[str] | None] = mapped_column(
-        ARRAY(Text), nullable=True
-    )
+    desired_job_categories: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     skills_summary: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text), nullable=True
     )  # Denormalized for fast filtering
     companies_summary: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text), nullable=True
     )  # Denormalized
-    notable_achievements: Mapped[list[str] | None] = mapped_column(
-        ARRAY(Text), nullable=True
-    )
-    verified_communities: Mapped[list[str] | None] = mapped_column(
-        ARRAY(Text), nullable=True
-    )
+    notable_achievements: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    verified_communities: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
     # ═══════════════════════════════════════════════════════════════════
     # COMPENSATION
@@ -133,12 +123,8 @@ class NormalizedCandidate(Base):
         default=VerificationStatusEnum.UNVERIFIED,
     )
     verification_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    verified_by: Mapped[UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
-    verified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    verified_by: Mapped[UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # ═══════════════════════════════════════════════════════════════════
     # PROCESSING METADATA
@@ -149,6 +135,8 @@ class NormalizedCandidate(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Full LLM response stored for narratives/vectorization
+    normalized_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Relationships
     skills: Mapped[list["CandidateSkill"]] = relationship(
@@ -186,15 +174,11 @@ class CandidateSkill(Base):
     __tablename__ = "candidate_skills"
     __table_args__ = (
         UniqueConstraint("candidate_id", "skill_id", name="uq_candidate_skill"),
-        CheckConstraint("rating >= 1 AND rating <= 5", name="ck_rating_range"),
+        CheckConstraint("rating >= 1 AND rating <= 10", name="ck_rating_range_10"),
     )
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign keys
     candidate_id: Mapped[UUID] = mapped_column(
@@ -209,14 +193,12 @@ class CandidateSkill(Base):
     )
 
     # Rating & Experience
-    rating: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-10 (LLM assessed)
     years_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notable_achievement: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Metadata
-    rated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    rated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     rating_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Relationships
@@ -234,12 +216,8 @@ class CandidateExperience(Base):
 
     __tablename__ = "candidate_experiences"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign key
     candidate_id: Mapped[UUID] = mapped_column(
@@ -264,9 +242,7 @@ class CandidateExperience(Base):
     position_order: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 = most recent
 
     # Metadata
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     candidate: Mapped["NormalizedCandidate"] = relationship(
@@ -305,12 +281,8 @@ class CandidateAttribute(Base):
         ),
     )
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign key
     candidate_id: Mapped[UUID] = mapped_column(
@@ -330,9 +302,7 @@ class CandidateAttribute(Base):
     reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Metadata
-    rated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    rated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     rating_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Relationships
@@ -347,17 +317,11 @@ class CandidateRoleFitness(Base):
     __tablename__ = "candidate_role_fitness"
     __table_args__ = (
         UniqueConstraint("candidate_id", "role_name", name="uq_candidate_role"),
-        CheckConstraint(
-            "fitness_score >= 0 AND fitness_score <= 1", name="ck_fitness_range"
-        ),
+        CheckConstraint("fitness_score >= 0 AND fitness_score <= 1", name="ck_fitness_range"),
     )
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign key
     candidate_id: Mapped[UUID] = mapped_column(
@@ -369,9 +333,7 @@ class CandidateRoleFitness(Base):
     # Role fitness
     role_name: Mapped[str] = mapped_column(Text, nullable=False)
     fitness_score: Mapped[float] = mapped_column(Float, nullable=False)
-    score_breakdown: Mapped[str | None] = mapped_column(
-        Text, nullable=True
-    )  # JSON string
+    score_breakdown: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON string
 
     # Metadata
     computed_at: Mapped[datetime] = mapped_column(
@@ -394,12 +356,8 @@ class CandidateProject(Base):
 
     __tablename__ = "candidate_projects"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign key
     candidate_id: Mapped[UUID] = mapped_column(
@@ -417,7 +375,9 @@ class CandidateProject(Base):
     # Hackathon-specific fields
     is_hackathon: Mapped[bool] = mapped_column(Boolean, default=False)
     hackathon_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prize_won: Mapped[str | None] = mapped_column(Text, nullable=True)  # e.g., "1st Place", "Best DeFi"
+    prize_won: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # e.g., "1st Place", "Best DeFi"
     prize_amount_usd: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Timeline
@@ -429,9 +389,7 @@ class CandidateProject(Base):
     project_order: Mapped[int] = mapped_column(Integer, default=1)  # 1 = most important/recent
 
     # Metadata
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     candidate: Mapped["NormalizedCandidate"] = relationship(
@@ -443,16 +401,10 @@ class CandidateGithubMetrics(Base):
     """Basic GitHub metrics for a candidate."""
 
     __tablename__ = "candidate_github_metrics"
-    __table_args__ = (
-        UniqueConstraint("candidate_id", name="uq_candidate_github"),
-    )
+    __table_args__ = (UniqueConstraint("candidate_id", name="uq_candidate_github"),)
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign key
     candidate_id: Mapped[UUID] = mapped_column(
@@ -472,9 +424,7 @@ class CandidateGithubMetrics(Base):
     languages: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
     # Metadata
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     candidate: Mapped["NormalizedCandidate"] = relationship(
@@ -490,16 +440,10 @@ class CandidateTwitterMetrics(Base):
     """
 
     __tablename__ = "candidate_twitter_metrics"
-    __table_args__ = (
-        UniqueConstraint("candidate_id", name="uq_candidate_twitter"),
-    )
+    __table_args__ = (UniqueConstraint("candidate_id", name="uq_candidate_twitter"),)
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign key
     candidate_id: Mapped[UUID] = mapped_column(
@@ -519,9 +463,7 @@ class CandidateTwitterMetrics(Base):
     listed_count: Mapped[int] = mapped_column(Integer, default=0)
 
     # Metadata
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     candidate: Mapped["NormalizedCandidate"] = relationship(
@@ -541,16 +483,10 @@ class CandidateLinkedinMetrics(Base):
     """
 
     __tablename__ = "candidate_linkedin_metrics"
-    __table_args__ = (
-        UniqueConstraint("candidate_id", name="uq_candidate_linkedin"),
-    )
+    __table_args__ = (UniqueConstraint("candidate_id", name="uq_candidate_linkedin"),)
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign key
     candidate_id: Mapped[UUID] = mapped_column(
@@ -574,9 +510,7 @@ class CandidateLinkedinMetrics(Base):
     )  # 'proxycurl', 'manual', 'nubela', etc.
 
     # Metadata
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     candidate: Mapped["NormalizedCandidate"] = relationship(

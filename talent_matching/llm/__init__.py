@@ -17,6 +17,15 @@ from talent_matching.llm.operations.embed_text import (
     EmbedTextResult,
     embed_text,
 )
+from talent_matching.llm.operations.extract_pdf import (
+    PROMPT_VERSION as PDF_PROMPT_VERSION,
+)
+from talent_matching.llm.operations.extract_pdf import (
+    ExtractPDFResult,
+    PDFEngine,
+    extract_pdf_from_url,
+    extract_pdf_text,
+)
 from talent_matching.llm.operations.normalize_cv import (
     PROMPT_VERSION as CV_PROMPT_VERSION,
 )
@@ -56,4 +65,10 @@ __all__ = [
     "EMBED_PROMPT_VERSION",
     "EmbedTextResult",
     "embed_text",
+    # PDF extraction
+    "PDF_PROMPT_VERSION",
+    "PDFEngine",
+    "ExtractPDFResult",
+    "extract_pdf_text",
+    "extract_pdf_from_url",
 ]

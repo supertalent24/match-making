@@ -9,19 +9,26 @@ This script displays all normalized information about a candidate including:
 - Raw candidate data
 - Normalized profile
 - Skills, experiences, and projects (if populated)
-- Vector embeddings status
+- Vector embeddings status (pure prose narratives)
+
+Vector Types (v3.0.0+):
+- experience: Career journey, roles, progression (pure prose)
+- domain: Industries, markets, ecosystems, protocols (pure prose)
+- personality: Work style, values, culture signals (pure prose)
+- impact: Scope, ownership, scale, measurable outcomes (pure prose)
+- technical: Systems thinking, architecture, deep expertise (pure prose)
 """
 
+import json
 import os
 import sys
 from datetime import datetime
 
+import psycopg2
 from dotenv import load_dotenv
+from psycopg2.extras import RealDictCursor
 
 load_dotenv()
-
-import psycopg2  # noqa: E402
-from psycopg2.extras import RealDictCursor  # noqa: E402
 
 
 def get_connection():
@@ -286,28 +293,170 @@ def inspect_candidate(partition_id: str):
                     print_field("Prize Won", proj["prize_won"], 2)
                     print_field("Prize Amount (USD)", proj["prize_amount_usd"], 2)
 
+        # ─────────────────────────────────────────────────────────
+        # SOFT ATTRIBUTES (Related Table)
+        # ─────────────────────────────────────────────────────────
+        print_section("SOFT ATTRIBUTES (LLM-Assessed)")
+
+        cur.execute(
+            """SELECT leadership_score, autonomy_score, technical_depth_score,
+                      communication_score, growth_trajectory_score, reasoning,
+                      rating_model, rated_at
+               FROM candidate_attributes WHERE candidate_id = %s""",
+            (normalized_id,),
+        )
+        attributes = cur.fetchone()
+
+        if not attributes:
+            print("  (No soft attributes yet - run normalization pipeline)")
+        else:
+            print("  Scores (1-5 scale):\n")
+            print_field("Leadership", f"{attributes['leadership_score']}/5", 1)
+            print_field("Autonomy", f"{attributes['autonomy_score']}/5", 1)
+            print_field("Technical Depth", f"{attributes['technical_depth_score']}/5", 1)
+            print_field("Communication", f"{attributes['communication_score']}/5", 1)
+            print_field("Growth Trajectory", f"{attributes['growth_trajectory_score']}/5", 1)
+            print()
+            print_field("Rating Model", attributes["rating_model"], 1)
+            print_field("Rated At", attributes["rated_at"], 1)
+            if attributes["reasoning"]:
+                print("\n  📝 Reasoning (JSON):")
+                print(f"    {format_value(attributes['reasoning'], max_length=500)}")
+
+        # ─────────────────────────────────────────────────────────
+        # NARRATIVES (Pure Prose for Vectorization)
+        # ─────────────────────────────────────────────────────────
+        print_section("NARRATIVES (Pure Prose for Vectorization)")
+
+        # Narratives are stored in normalized_json
+        normalized_json = normalized.get("normalized_json")
+        if normalized_json:
+            if isinstance(normalized_json, str):
+                normalized_json = json.loads(normalized_json)
+
+            narratives = normalized_json.get("narratives", {})
+            if narratives:
+                narrative_types = ["experience", "domain", "personality", "impact", "technical"]
+                for ntype in narrative_types:
+                    text = narratives.get(ntype)
+                    if text:
+                        print(f"\n  📖 {ntype.upper()}")
+                        # Wrap text nicely
+                        wrapped = format_value(text, max_length=500)
+                        print(f"     {wrapped}")
+                    else:
+                        print(f"\n  ❌ {ntype.upper()}: (missing)")
+            else:
+                print("  ❌ No narratives found in normalized_json")
+                print("     (Prompt version may be < 4.0.0, or LLM didn't generate them)")
+        else:
+            print("  ❌ No normalized_json data available")
+
     # ─────────────────────────────────────────────────────────────
     # VECTOR EMBEDDINGS
     # ─────────────────────────────────────────────────────────────
     print_section("VECTOR EMBEDDINGS")
 
+    print("  ℹ️  Vector categories:")
+    print("     📝 Narratives: experience, domain, personality, impact, technical")
+    print("     🔧 Skills: skill_{name} - structured with proficiency level")
+    print("     💼 Positions: position_{n} - job descriptions")
+    print("     🚀 Projects: project_{n} - description + technologies")
+    print()
+
+    # Expected narrative vector types
+    narrative_vectors = {"experience", "domain", "personality", "impact", "technical"}
+
     if normalized:
+        # Vectors are stored by raw_candidate_id, not normalized_candidates.id
+        raw_cand_id = normalized["raw_candidate_id"]
         cur.execute(
             """SELECT vector_type, model_version, created_at,
                       vector_dims(vector) as dimensions
-               FROM candidate_vectors WHERE candidate_id = %s""",
-            (normalized_id,),
+               FROM candidate_vectors WHERE candidate_id = %s
+               ORDER BY vector_type""",
+            (raw_cand_id,),
         )
         vectors = cur.fetchall()
 
         if not vectors:
             print("  ❌ No embeddings yet (run the candidate_vectors asset)")
         else:
+            # Categorize vectors
+            narratives = []
+            skills = []
+            positions = []
+            projects = []
+            other = []
+
             for vec in vectors:
+                vtype = vec["vector_type"]
+                if vtype in narrative_vectors:
+                    narratives.append(vec)
+                elif vtype.startswith("skill_"):
+                    skills.append(vec)
+                elif vtype.startswith("position_"):
+                    positions.append(vec)
+                elif vtype.startswith("project_"):
+                    projects.append(vec)
+                else:
+                    other.append(vec)
+
+            def print_vector(vec, indent=2):
+                spaces = " " * indent
                 print(
-                    f"  ✅ {vec['vector_type']}: {vec['dimensions']} dimensions "
-                    f"(model: {vec['model_version']}, created: {format_value(vec['created_at'])})"
+                    f"{spaces}✅ {vec['vector_type']}: {vec['dimensions']} dims "
+                    f"(model: {vec['model_version']})"
                 )
+
+            # Print narratives
+            if narratives:
+                print("  📝 NARRATIVE VECTORS")
+                for vec in sorted(narratives, key=lambda x: x["vector_type"]):
+                    print_vector(vec, 4)
+                print()
+
+            # Print skills
+            if skills:
+                print(f"  🔧 SKILL VECTORS ({len(skills)} skills)")
+                for vec in sorted(skills, key=lambda x: x["vector_type"]):
+                    # Extract skill name from skill_xxx format
+                    skill_name = vec["vector_type"].replace("skill_", "").replace("_", " ").title()
+                    print(f"    ✅ {skill_name}: {vec['dimensions']} dims")
+                print()
+
+            # Print positions
+            if positions:
+                print(f"  💼 POSITION VECTORS ({len(positions)} jobs)")
+                for vec in sorted(positions, key=lambda x: int(x["vector_type"].split("_")[1])):
+                    idx = vec["vector_type"].split("_")[1]
+                    print(f"    ✅ Position {idx}: {vec['dimensions']} dims")
+                print()
+
+            # Print projects
+            if projects:
+                print(f"  🚀 PROJECT VECTORS ({len(projects)} projects)")
+                for vec in sorted(projects, key=lambda x: int(x["vector_type"].split("_")[1])):
+                    idx = vec["vector_type"].split("_")[1]
+                    print(f"    ✅ Project {idx}: {vec['dimensions']} dims")
+                print()
+
+            # Print legacy/other vectors
+            if other:
+                print("  ⚠️  OTHER/LEGACY VECTORS (will be replaced on re-materialization)")
+                for vec in sorted(other, key=lambda x: x["vector_type"]):
+                    print_vector(vec, 4)
+                print()
+
+            # Summary
+            total = len(vectors)
+            print(f"  📊 TOTAL: {total} vectors")
+
+            # Check for missing narratives
+            found_narratives = {v["vector_type"] for v in narratives}
+            missing = narrative_vectors - found_narratives
+            if missing:
+                print(f"  ⚠️  Missing narratives: {', '.join(sorted(missing))}")
     else:
         print("  ❌ Candidate not normalized yet - no vectors possible")
 

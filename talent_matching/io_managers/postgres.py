@@ -24,6 +24,7 @@ from talent_matching.models import (
     RawJob,
 )
 from talent_matching.models.candidates import (
+    CandidateAttribute,
     CandidateExperience,
     CandidateProject,
     CandidateSkill,
@@ -486,6 +487,8 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             "prompt_version": data.get("prompt_version"),
             "model_version": data.get("model_version"),
             "confidence_score": normalized_json.get("confidence_score"),
+            # Store full LLM response for narratives/vectorization
+            "normalized_json": normalized_json,
         }
 
         # Upsert normalized candidate
@@ -517,6 +520,17 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         projects = normalized_json.get("projects", [])
         self._store_candidate_projects(
             session, normalized_id, partition_key, projects, hackathons, context
+        )
+
+        # Store soft attributes from LLM response
+        soft_attributes = normalized_json.get("soft_attributes", {})
+        self._store_candidate_attributes(
+            session,
+            normalized_id,
+            partition_key,
+            soft_attributes,
+            data.get("model_version"),
+            context,
         )
 
         # Update raw candidate processing status
@@ -605,13 +619,17 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
 
         skills_stored = 0
         for skill_item in skills:
-            # Handle both new format (dict) and legacy format (string)
+            # Handle both new format (dict with proficiency) and legacy format (string)
             if isinstance(skill_item, dict):
                 skill_name = skill_item.get("name")
                 years = skill_item.get("years")
+                proficiency = skill_item.get("proficiency")  # 1-10 from LLM
+                evidence = skill_item.get("evidence")  # Justification for rating
             elif isinstance(skill_item, str):
                 skill_name = skill_item
                 years = None
+                proficiency = None
+                evidence = None
             else:
                 continue
 
@@ -623,13 +641,19 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             if not skill_id:
                 continue
 
+            # Use LLM proficiency rating if available, otherwise default to 5
+            rating = int(proficiency) if proficiency else 5
+            # Clamp to valid range 1-10
+            rating = max(1, min(10, rating))
+
             values = {
                 "id": uuid4(),
                 "airtable_record_id": f"{partition_key}_skill_{hash(skill_name) % 10000:04d}",
                 "candidate_id": candidate_id,
                 "skill_id": skill_id,
-                "rating": 3,  # Default mid-range rating
+                "rating": rating,
                 "years_experience": int(years) if years else None,
+                "notable_achievement": evidence,  # Store evidence as notable achievement
                 "rating_model": model_version,
             }
 
@@ -732,7 +756,10 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
 
                 order += 1
                 # Build description from hackathon data
+                # Use LLM's description first (e.g., "Top 6 teams out of 500")
                 description_parts = []
+                if hackathon.get("description"):
+                    description_parts.append(hackathon.get("description"))
                 if hackathon.get("prize"):
                     description_parts.append(f"Prize: {hackathon.get('prize')}")
                 if hackathon.get("prize_amount_usd"):
@@ -761,6 +788,76 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         session.commit()
         if projects_stored > 0:
             context.log.info(f"Stored {projects_stored} projects/hackathons for {partition_key}")
+
+    def _store_candidate_attributes(
+        self,
+        session: Session,
+        candidate_id: Any,
+        partition_key: str,
+        soft_attributes: dict[str, Any],
+        model_version: str | None,
+        context: OutputContext,
+    ) -> None:
+        """Store soft attributes from LLM response.
+
+        LLM returns soft_attributes as:
+        {
+            "leadership": {"score": 4, "reasoning": "Led team of 10..."},
+            "autonomy": {"score": 3, "reasoning": "..."},
+            ...
+        }
+        """
+        if not soft_attributes or not isinstance(soft_attributes, dict):
+            return
+
+        # Extract scores and reasoning
+        leadership = soft_attributes.get("leadership", {})
+        autonomy = soft_attributes.get("autonomy", {})
+        technical_depth = soft_attributes.get("technical_depth", {})
+        communication = soft_attributes.get("communication", {})
+        growth_trajectory = soft_attributes.get("growth_trajectory", {})
+
+        # Build combined reasoning text (for vectorization later)
+        reasoning_parts = []
+        for attr_name, attr_data in [
+            ("Leadership", leadership),
+            ("Autonomy", autonomy),
+            ("Technical Depth", technical_depth),
+            ("Communication", communication),
+            ("Growth Trajectory", growth_trajectory),
+        ]:
+            if isinstance(attr_data, dict) and attr_data.get("reasoning"):
+                reasoning_parts.append(f"{attr_name}: {attr_data['reasoning']}")
+
+        reasoning_text = " | ".join(reasoning_parts) if reasoning_parts else None
+
+        values = {
+            "id": uuid4(),
+            "candidate_id": candidate_id,
+            "leadership_score": leadership.get("score") if isinstance(leadership, dict) else None,
+            "autonomy_score": autonomy.get("score") if isinstance(autonomy, dict) else None,
+            "technical_depth_score": (
+                technical_depth.get("score") if isinstance(technical_depth, dict) else None
+            ),
+            "communication_score": (
+                communication.get("score") if isinstance(communication, dict) else None
+            ),
+            "growth_trajectory_score": (
+                growth_trajectory.get("score") if isinstance(growth_trajectory, dict) else None
+            ),
+            "reasoning": reasoning_text,
+            "rating_model": model_version,
+        }
+
+        # Upsert: delete existing and insert new
+        session.execute(
+            delete(CandidateAttribute).where(CandidateAttribute.candidate_id == candidate_id)
+        )
+        stmt = insert(CandidateAttribute).values(**values)
+        session.execute(stmt)
+        session.commit()
+
+        context.log.info(f"Stored soft attributes for {partition_key}")
 
     def _store_raw_job(self, context: OutputContext, data: dict[str, Any]) -> None:
         """Store raw job data using SQLAlchemy ORM with upsert."""
