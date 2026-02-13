@@ -33,6 +33,42 @@ class LLMContext:
     code_version: str = ""
 
 
+@dataclass
+class RunCostAccumulator:
+    """Accumulates LLM costs across all assets in a run."""
+
+    total_cost_usd: Decimal = Decimal("0")
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    api_calls: int = 0
+    costs_by_asset: dict = None  # asset_key -> cost
+
+    def __post_init__(self):
+        if self.costs_by_asset is None:
+            self.costs_by_asset = {}
+
+    def add(self, asset_key: str, cost_usd: Decimal, input_tokens: int, output_tokens: int):
+        """Record a cost."""
+        self.total_cost_usd += cost_usd
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.api_calls += 1
+        self.costs_by_asset[asset_key] = self.costs_by_asset.get(asset_key, Decimal("0")) + cost_usd
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
+
+    def to_metadata(self) -> dict:
+        """Return as Dagster metadata dict."""
+        return {
+            "llm/total_cost_usd": float(self.total_cost_usd),
+            "llm/total_tokens": self.total_tokens,
+            "llm/api_calls": self.api_calls,
+            "llm/costs_by_asset": {k: float(v) for k, v in self.costs_by_asset.items()},
+        }
+
+
 class OpenRouterResource(ConfigurableResource):
     """OpenRouter LLM resource with built-in cost tracking.
 
@@ -86,6 +122,7 @@ class OpenRouterResource(ConfigurableResource):
 
     # Internal state (not configurable, uses Pydantic PrivateAttr)
     _context: LLMContext = PrivateAttr(default_factory=LLMContext)
+    _run_costs: RunCostAccumulator = PrivateAttr(default_factory=RunCostAccumulator)
 
     def set_context(
         self,
@@ -124,11 +161,18 @@ class OpenRouterResource(ConfigurableResource):
         output_tokens: int,
         cost_usd: Decimal,
     ) -> None:
-        """Store cost record in PostgreSQL.
+        """Store cost record in PostgreSQL and accumulate for run totals.
 
         Uses a sync database operation wrapped in asyncio.to_thread to avoid
         blocking the event loop.
         """
+        # Accumulate for run-level totals
+        self._run_costs.add(
+            asset_key=self._context.asset_key or "unknown",
+            cost_usd=cost_usd,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
         def _insert_record() -> None:
             engine = create_engine(self._get_db_url())
@@ -148,6 +192,18 @@ class OpenRouterResource(ConfigurableResource):
                 session.commit()
 
         await asyncio.to_thread(_insert_record)
+
+    def get_run_costs(self) -> RunCostAccumulator:
+        """Get accumulated costs for the current run.
+
+        Call this at the end of a job to get totals across all assets.
+        Useful for outputting run-level metadata.
+        """
+        return self._run_costs
+
+    def reset_run_costs(self) -> None:
+        """Reset the run cost accumulator. Call at start of a new run."""
+        self._run_costs = RunCostAccumulator()
 
     def _log_cost(
         self,
