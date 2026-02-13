@@ -100,10 +100,13 @@ IMPORTANT:
 class NormalizeCVResult:
     """Result of CV normalization with usage stats for Dagster metadata."""
 
-    def __init__(self, data: dict[str, Any], usage: dict[str, Any], model: str):
+    def __init__(
+        self, data: dict[str, Any], usage: dict[str, Any], model: str, prompt_version: str
+    ):
         self.data = data
         self.usage = usage
         self.model = model
+        self.prompt_version = prompt_version
 
     @property
     def input_tokens(self) -> int:
@@ -150,4 +153,6 @@ async def normalize_cv(
     content = response["choices"][0]["message"]["content"]
     usage = response.get("usage", {})
 
-    return NormalizeCVResult(data=json.loads(content), usage=usage, model=model)
+    return NormalizeCVResult(
+        data=json.loads(content), usage=usage, model=model, prompt_version=PROMPT_VERSION
+    )

@@ -115,7 +115,7 @@ def raw_candidates(
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
-    code_version="1.3.0",  # Bump when prompt or normalization logic changes
+    code_version="1.4.0",  # Bump when prompt or normalization logic changes
     op_tags={
         # Limit concurrent OpenRouter API calls to avoid rate limits
         # All assets sharing this key compete for the same concurrency slots
@@ -230,6 +230,7 @@ def normalized_candidates(
         "airtable_record_id": raw_candidates.get("airtable_record_id"),
         "normalized_json": result.data,
         "model_version": result.model,
+        "prompt_version": result.prompt_version,
     }
 
 

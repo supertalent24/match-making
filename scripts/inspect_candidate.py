@@ -252,7 +252,8 @@ def inspect_candidate(partition_id: str):
                 current = " (current)" if exp["is_current"] else ""
                 print(f"\n  [{i}] {exp['position_title']} at {exp['company_name']}{current}")
                 print_field("Years", exp["years_experience"], 2)
-                print_field("Period", f"{exp['start_date']} to {exp['end_date'] or 'present'}", 2)
+                end_str = "present" if exp["is_current"] else (exp["end_date"] or "—")
+                print_field("Period", f"{exp['start_date'] or '—'} to {end_str}", 2)
                 print_field("Description", exp["description"], 2)
                 print_field("Skills Used", exp["skills_used"], 2)
 
