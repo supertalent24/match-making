@@ -29,7 +29,50 @@ from talent_matching.models.candidates import (
     CandidateProject,
     CandidateSkill,
 )
+from talent_matching.models.enums import (
+    EmploymentTypeEnum,
+    LocationTypeEnum,
+    RequirementTypeEnum,
+    SeniorityEnum,
+)
+from talent_matching.models.jobs import JobRequiredSkill
 from talent_matching.models.skills import ReviewStatusEnum, Skill
+
+
+def _parse_employment_type(value: Any) -> EmploymentTypeEnum | None:
+    if value is None:
+        return None
+    s = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    for e in EmploymentTypeEnum:
+        if e.value == s or s in e.value:
+            return e
+    return None
+
+
+def _parse_employment_types(value: Any) -> list[EmploymentTypeEnum] | None:
+    """Parse employment_type from LLM (single string or list of strings) to list of enums."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        items = value
+    else:
+        items = [value]
+    result = []
+    for item in items:
+        parsed = _parse_employment_type(item)
+        if parsed is not None and parsed not in result:
+            result.append(parsed)
+    return result if result else None
+
+
+def _parse_location_type(value: Any) -> LocationTypeEnum | None:
+    if not value:
+        return None
+    s = str(value).strip().lower()
+    for e in LocationTypeEnum:
+        if e.value == s or s in e.value:
+            return e
+    return None
 
 
 def _serialize_for_text(value: Any) -> str | None:
@@ -665,8 +708,18 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         session.commit()
         context.log.info(f"Stored {skills_stored} skills for {partition_key}")
 
-    def _get_or_create_skill(self, session: Session, skill_name: str) -> Any:
-        """Get existing skill ID or create a new one."""
+    def _get_or_create_skill(
+        self,
+        session: Session,
+        skill_name: str,
+        *,
+        is_requirement: bool = False,
+    ) -> Any:
+        """Get existing skill ID or create a new one.
+
+        When creating a new skill, is_requirement is set (e.g. True for job requirements).
+        Existing skills are returned as-is; their is_requirement is not updated.
+        """
         # Normalize skill name for slug (limited to 100 chars by database schema)
         slug = skill_name.lower().strip().replace(" ", "-").replace(".", "")
         if len(slug) > 100:
@@ -688,6 +741,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             created_by="llm",
             is_active=True,
             review_status=ReviewStatusEnum.PENDING,
+            is_requirement=is_requirement,
         )
 
         try:
@@ -915,18 +969,75 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             session.close()
             return
 
+        req = data.get("requirements") or {}
+        comp = data.get("compensation") or {}
+        contact = data.get("contact") or {}
+        loc = data.get("location") or {}
+        narratives = data.get("narratives") or {}
+        soft_req = data.get("soft_attribute_requirements") or {}
+        seniority_raw = (data.get("seniority_level") or "").strip().lower()
+        seniority_enum = None
+        if seniority_raw:
+            try:
+                seniority_enum = SeniorityEnum(seniority_raw)
+            except ValueError:
+                pass
+
+        def _min_soft(key: str) -> int | None:
+            v = soft_req.get(key)
+            if v is None:
+                return None
+            if isinstance(v, int) and 1 <= v <= 5:
+                return v
+            return None
+
         values = {
             "airtable_record_id": record_id,
             "raw_job_id": raw_job.id,
-            "job_title": data.get("job_title", "Unknown"),
+            "job_title": data.get("title") or data.get("job_title", "Unknown"),
             "job_category": data.get("job_category"),
             "company_name": data.get("company_name", "Unknown"),
             "job_description": data.get("job_description"),
-            "role_summary": data.get("role_summary"),
+            "role_summary": data.get("role_description") or data.get("role_summary"),
+            "responsibilities": data.get("responsibilities"),
+            "nice_to_haves": data.get("nice_to_haves"),
+            "benefits": data.get("benefits"),
+            "team_context": data.get("team_context"),
+            "seniority_level": seniority_enum,
+            "education_required": req.get("education_required"),
+            "domain_experience": req.get("domain_experience"),
+            "tech_stack": data.get("tech_stack"),
+            "min_years_experience": req.get("years_of_experience_min"),
+            "max_years_experience": req.get("years_of_experience_max"),
+            "salary_min": comp.get("salary_min"),
+            "salary_max": comp.get("salary_max"),
+            "salary_currency": (comp.get("currency") or "USD")[:10],
+            "has_equity": comp.get("equity"),
+            "location_type": _parse_location_type(loc.get("type")),
+            "locations": loc.get("locations"),
+            "employment_type": _parse_employment_types(data.get("employment_type")),
+            "min_leadership_score": _min_soft("leadership"),
+            "min_autonomy_score": _min_soft("autonomy"),
+            "min_technical_depth_score": _min_soft("technical_depth"),
+            "min_communication_score": _min_soft("communication"),
+            "min_growth_trajectory_score": _min_soft("growth_trajectory"),
+            "hiring_manager_name": contact.get("hiring_manager_name")
+            or data.get("hiring_manager_name"),
+            "hiring_manager_email": contact.get("hiring_manager_email")
+            or data.get("hiring_manager_email"),
+            "application_url": contact.get("application_url") or data.get("application_url"),
             "prompt_version": data.get("prompt_version"),
             "model_version": data.get("model_version"),
             "confidence_score": data.get("confidence_score"),
-            # Add other fields as needed
+            "normalized_json": data.get("normalized_json"),
+            "narrative_experience": narratives.get("experience")
+            or data.get("narrative_experience"),
+            "narrative_domain": narratives.get("domain") or data.get("narrative_domain"),
+            "narrative_personality": narratives.get("personality")
+            or data.get("narrative_personality"),
+            "narrative_impact": narratives.get("impact") or data.get("narrative_impact"),
+            "narrative_technical": narratives.get("technical") or data.get("narrative_technical"),
+            "narrative_role": narratives.get("role") or data.get("narrative_role"),
         }
 
         stmt = insert(NormalizedJob).values(**values)
@@ -936,6 +1047,50 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         )
 
         session.execute(stmt)
+        session.commit()
+
+        # Resolve required skills and write job_required_skills
+        normalized_job = session.execute(
+            select(NormalizedJob).where(NormalizedJob.airtable_record_id == record_id)
+        ).scalar_one()
+        session.execute(
+            delete(JobRequiredSkill).where(JobRequiredSkill.job_id == normalized_job.id)
+        )
+        must_have = req.get("must_have_skills") or []
+        nice_to_have = req.get("nice_to_have_skills") or []
+        added_skill_ids: set[UUID] = set()
+        for skill_name in must_have:
+            if not (skill_name and str(skill_name).strip()):
+                continue
+            skill_id = self._get_or_create_skill(
+                session, str(skill_name).strip(), is_requirement=True
+            )
+            if skill_id and skill_id not in added_skill_ids:
+                added_skill_ids.add(skill_id)
+                session.add(
+                    JobRequiredSkill(
+                        id=uuid4(),
+                        job_id=normalized_job.id,
+                        skill_id=skill_id,
+                        requirement_type=RequirementTypeEnum.MUST_HAVE,
+                    )
+                )
+        for skill_name in nice_to_have:
+            if not (skill_name and str(skill_name).strip()):
+                continue
+            skill_id = self._get_or_create_skill(
+                session, str(skill_name).strip(), is_requirement=True
+            )
+            if skill_id and skill_id not in added_skill_ids:
+                added_skill_ids.add(skill_id)
+                session.add(
+                    JobRequiredSkill(
+                        id=uuid4(),
+                        job_id=normalized_job.id,
+                        skill_id=skill_id,
+                        requirement_type=RequirementTypeEnum.NICE_TO_HAVE,
+                    )
+                )
         session.commit()
 
         raw_job.processing_status = ProcessingStatusEnum.COMPLETED

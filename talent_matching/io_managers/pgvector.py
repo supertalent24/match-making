@@ -5,6 +5,7 @@ using SQLAlchemy with pgvector extension for efficient similarity search.
 """
 
 from typing import Any
+from uuid import uuid4
 
 from dagster import ConfigurableIOManager, InputContext, OutputContext
 from pydantic import Field
@@ -187,6 +188,7 @@ class PgVectorIOManager(ConfigurableIOManager):
                 continue
 
             values = {
+                "id": uuid4(),
                 "candidate_id": raw_candidate.id,
                 "vector_type": record.get("vector_type", "unknown"),
                 "vector": vector,
@@ -208,9 +210,14 @@ class PgVectorIOManager(ConfigurableIOManager):
         """
         session = self._get_session()
         partition_key = context.partition_key if hasattr(context, "partition_key") else None
-        record_id = (
-            partition_key or data.get("airtable_record_id") if isinstance(data, dict) else None
-        )
+        if partition_key:
+            record_id = partition_key
+        elif isinstance(data, list) and data:
+            record_id = data[0].get("airtable_record_id")
+        elif isinstance(data, dict):
+            record_id = data.get("airtable_record_id")
+        else:
+            record_id = None
 
         # Get the raw job ID
         raw_job = None
@@ -241,6 +248,7 @@ class PgVectorIOManager(ConfigurableIOManager):
                 continue
 
             values = {
+                "id": uuid4(),
                 "job_id": raw_job.id,
                 "vector_type": record.get("vector_type", "unknown"),
                 "vector": vector,

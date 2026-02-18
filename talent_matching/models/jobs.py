@@ -17,7 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from talent_matching.models.base import Base
@@ -62,12 +62,8 @@ class NormalizedJob(Base):
         ),
     )
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     raw_job_id: Mapped[UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("raw_jobs.id", ondelete="CASCADE"),
@@ -94,18 +90,16 @@ class NormalizedJob(Base):
     )
     company_size: Mapped[str | None] = mapped_column(Text, nullable=True)
     company_website: Mapped[str | None] = mapped_column(Text, nullable=True)
-    company_x_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Company X/Twitter profile
+    company_x_url: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # Company X/Twitter profile
 
     # ═══════════════════════════════════════════════════════════════════
     # JOB DETAILS
     # ═══════════════════════════════════════════════════════════════════
     job_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    role_summary: Mapped[str | None] = mapped_column(
-        Text, nullable=True
-    )  # 2-3 sentence summary
-    responsibilities: Mapped[list[str] | None] = mapped_column(
-        ARRAY(Text), nullable=True
-    )
+    role_summary: Mapped[str | None] = mapped_column(Text, nullable=True)  # 2-3 sentence summary
+    responsibilities: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     nice_to_haves: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     benefits: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     team_context: Mapped[str | None] = mapped_column(
@@ -140,8 +134,9 @@ class NormalizedJob(Base):
     timezone_requirements: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # e.g., "UTC-5 to UTC+3"
-    employment_type: Mapped[EmploymentTypeEnum | None] = mapped_column(
-        Enum(EmploymentTypeEnum, name="employment_type_enum"), nullable=True
+    employment_type: Mapped[list[EmploymentTypeEnum] | None] = mapped_column(
+        ARRAY(Enum(EmploymentTypeEnum, name="employment_type_enum", create_constraint=False)),
+        nullable=True,
     )
 
     # ═══════════════════════════════════════════════════════════════════
@@ -176,9 +171,7 @@ class NormalizedJob(Base):
     status: Mapped[JobStatusEnum] = mapped_column(
         Enum(JobStatusEnum, name="job_status_enum"), default=JobStatusEnum.ACTIVE
     )
-    priority: Mapped[int] = mapped_column(
-        Integer, default=3
-    )  # 1=urgent, 2=high, 3=normal, 4=low
+    priority: Mapped[int] = mapped_column(Integer, default=3)  # 1=urgent, 2=high, 3=normal, 4=low
     posted_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     deadline_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -199,6 +192,17 @@ class NormalizedJob(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    normalized_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # NARRATIVE PROSE (for vector matching with candidate vectors)
+    # ═══════════════════════════════════════════════════════════════════
+    narrative_experience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative_domain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative_personality: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative_impact: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative_technical: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative_role: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     required_skills: Mapped[list["JobRequiredSkill"]] = relationship(
@@ -215,17 +219,11 @@ class JobRequiredSkill(Base):
     __tablename__ = "job_required_skills"
     __table_args__ = (
         UniqueConstraint("job_id", "skill_id", name="uq_job_skill"),
-        CheckConstraint(
-            "min_years IS NULL OR min_years >= 0", name="ck_min_years_positive"
-        ),
+        CheckConstraint("min_years IS NULL OR min_years >= 0", name="ck_min_years_positive"),
     )
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    airtable_record_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    airtable_record_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     # Foreign keys
     job_id: Mapped[UUID] = mapped_column(
@@ -247,14 +245,10 @@ class JobRequiredSkill(Base):
     min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Metadata
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
-    job: Mapped["NormalizedJob"] = relationship(
-        "NormalizedJob", back_populates="required_skills"
-    )
+    job: Mapped["NormalizedJob"] = relationship("NormalizedJob", back_populates="required_skills")
     skill: Mapped["Skill"] = relationship("Skill")
 
 
