@@ -6,6 +6,7 @@ from talent_matching.assets.candidates import (
     raw_candidates,
 )
 from talent_matching.assets.jobs import (
+    airtable_job_sync,
     job_vectors,
     matches,
     normalized_jobs,
@@ -26,6 +27,7 @@ __all__ = [
     "raw_jobs",
     "normalized_jobs",
     "job_vectors",
+    "airtable_job_sync",
     # Social metrics
     "candidate_twitter_metrics",
     "candidate_linkedin_metrics",

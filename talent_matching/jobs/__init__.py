@@ -7,11 +7,12 @@ ASSET JOBS (for materializing assets):
 - candidate_ingest: Fetch and store raw candidates only (no LLM)
 
 OPS JOBS (for operational tasks):
-- sync_airtable_job: Register Airtable records as dynamic partitions
+- sync_airtable_candidates_job: Register Airtable candidate records as dynamic partitions
+- sync_airtable_jobs_job: Register Airtable job records as dynamic partitions
 - sample_candidates_job: Fetch 20 candidates and log data quality stats
 
 USAGE:
-1. Run sync_airtable_job to register partitions from Airtable
+1. Run sync_airtable_candidates_job to register candidate partitions from Airtable
 2. Go to Jobs → candidate_pipeline → Backfill
 3. Select partitions (all, or first N for testing) and launch
 """
@@ -32,6 +33,14 @@ from talent_matching.assets.candidates import (
     candidate_vectors,
     normalized_candidates,
     raw_candidates,
+)
+from talent_matching.assets.jobs import (
+    airtable_job_sync,
+    airtable_jobs,
+    job_partitions,
+    job_vectors,
+    normalized_jobs,
+    raw_jobs,
 )
 
 # =============================================================================
@@ -78,6 +87,38 @@ candidate_ingest_job = define_asset_job(
     partitions_def=candidate_partitions,
 )
 
+# Job pipeline (partitioned per Airtable job record).
+# To write parsed data back to Airtable, set run config: ops → airtable_job_sync → config → sync_to_airtable: true
+job_pipeline_job = define_asset_job(
+    name="job_pipeline",
+    description=(
+        "Process jobs: fetch → raw → normalize (LLM) → vectorize → optional Airtable write-back. "
+        "Airtable sync is off by default; enable via run config (ops.airtable_job_sync.config.sync_to_airtable: true)."
+    ),
+    selection=[
+        airtable_jobs,
+        raw_jobs,
+        normalized_jobs,
+        job_vectors,
+        airtable_job_sync,
+    ],
+    partitions_def=job_partitions,
+    op_retry_policy=openrouter_retry_policy,
+)
+
+job_ingest_job = define_asset_job(
+    name="job_ingest",
+    description=(
+        "Fetch and store raw job data from Airtable (Notion fetch, no LLM). "
+        "Use for initial load before running normalization."
+    ),
+    selection=[
+        airtable_jobs,
+        raw_jobs,
+    ],
+    partitions_def=job_partitions,
+)
+
 
 # =============================================================================
 # OPS JOBS (for operational tasks)
@@ -85,11 +126,11 @@ candidate_ingest_job = define_asset_job(
 
 
 @op(required_resource_keys={"airtable"})
-def sync_airtable_partitions(context: OpExecutionContext) -> dict:
-    """Sync all Airtable record IDs as dynamic partitions.
+def sync_airtable_candidates_partitions(context: OpExecutionContext) -> dict:
+    """Sync all Airtable candidate record IDs as dynamic partitions.
 
-    This op fetches all record IDs from Airtable and registers them
-    as dynamic partitions, making them available for processing.
+    This op fetches all record IDs from the candidates table and registers them
+    as dynamic partitions, making them available for candidate_pipeline.
     """
     airtable = context.resources.airtable
 
@@ -178,14 +219,47 @@ def log_sample_stats(context: OpExecutionContext, candidates: list) -> dict:
     return stats
 
 
-@job(description="Sync all Airtable records as dynamic partitions")
-def sync_airtable_job():
-    """Register all Airtable record IDs as dynamic partitions.
+@job(description="Sync Airtable candidate records as dynamic partitions")
+def sync_airtable_candidates_job():
+    """Register all Airtable candidate record IDs as dynamic partitions.
 
     Run this job first to populate the partition list, then use
     candidate_pipeline with Backfill to process them.
     """
-    sync_airtable_partitions()
+    sync_airtable_candidates_partitions()
+
+
+@op(required_resource_keys={"airtable_jobs"})
+def sync_airtable_jobs_partitions(context: OpExecutionContext) -> dict:
+    """Sync all Airtable job record IDs as dynamic partitions (jobs table)."""
+    airtable_jobs_resource = context.resources.airtable_jobs
+    context.log.info("Fetching all record IDs from Airtable jobs table...")
+    all_record_ids = airtable_jobs_resource.get_all_record_ids()
+    context.log.info(f"Found {len(all_record_ids)} job records")
+
+    existing = set(context.instance.get_dynamic_partitions(partitions_def_name=job_partitions.name))
+    new_record_ids = set(all_record_ids) - existing
+    if new_record_ids:
+        context.instance.add_dynamic_partitions(
+            partitions_def_name=job_partitions.name,
+            partition_keys=list(new_record_ids),
+        )
+        context.log.info(f"Added {len(new_record_ids)} new job partitions")
+    context.log.info("Next: Go to Jobs → job_pipeline → Backfill to process job partitions")
+    return {
+        "total_records": len(all_record_ids),
+        "existing_partitions": len(existing),
+        "new_partitions": len(new_record_ids),
+    }
+
+
+@job(description="Sync Airtable job records as dynamic partitions")
+def sync_airtable_jobs_job():
+    """Register all Airtable job record IDs (jobs table) as dynamic partitions.
+
+    Run before job_pipeline Backfill to process jobs.
+    """
+    sync_airtable_jobs_partitions()
 
 
 @job(description="Fetch 20 candidates and log data quality statistics")
@@ -204,6 +278,9 @@ def sample_candidates_job():
 __all__ = [
     "candidate_pipeline_job",
     "candidate_ingest_job",
-    "sync_airtable_job",
+    "job_pipeline_job",
+    "job_ingest_job",
+    "sync_airtable_candidates_job",
+    "sync_airtable_jobs_job",
     "sample_candidates_job",
 ]

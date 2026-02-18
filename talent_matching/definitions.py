@@ -23,13 +23,18 @@ from talent_matching.io_managers import PgVectorIOManager, PostgresMetricsIOMana
 from talent_matching.jobs import (
     candidate_ingest_job,
     candidate_pipeline_job,
+    job_ingest_job,
+    job_pipeline_job,
     sample_candidates_job,
-    sync_airtable_job,
+    sync_airtable_candidates_job,
+    sync_airtable_jobs_job,
 )
 from talent_matching.resources import (
+    AirtableJobsResource,
     AirtableResource,
     GitHubAPIResource,
     LinkedInAPIResource,
+    NotionResource,
     OpenRouterResource,
     TwitterAPIResource,
 )
@@ -56,6 +61,14 @@ dev_resources = {
         table_id=EnvVar("AIRTABLE_TABLE_ID"),
         api_key=EnvVar("AIRTABLE_API_KEY"),
     ),
+    # Airtable jobs table (e.g. Customers STT with Job Description Link)
+    "airtable_jobs": AirtableJobsResource(
+        base_id=EnvVar("AIRTABLE_BASE_ID"),
+        table_id=EnvVar("AIRTABLE_JOBS_TABLE_ID"),
+        api_key=EnvVar("AIRTABLE_API_KEY"),
+    ),
+    # Notion API for fetching job description page content (optional key; tries without if unset)
+    "notion": NotionResource(api_key=os.getenv("NOTION_API_KEY", "")),
     # OpenRouter LLM resource with cost tracking (also handles embeddings)
     "openrouter": OpenRouterResource(
         api_key=EnvVar("OPENROUTER_API_KEY"),
@@ -112,8 +125,11 @@ all_jobs = [
     # Asset jobs (partitioned) - use Backfill in UI to select partitions
     candidate_pipeline_job,
     candidate_ingest_job,
+    job_pipeline_job,
+    job_ingest_job,
     # Ops jobs (non-partitioned)
-    sync_airtable_job,
+    sync_airtable_candidates_job,
+    sync_airtable_jobs_job,
     sample_candidates_job,
 ]
 

@@ -8,7 +8,6 @@ be used independently for testing and data transformation.
 import re
 from typing import Any
 
-
 # Column name mapping from Airtable to RawCandidate model fields
 AIRTABLE_COLUMN_MAPPING: dict[str, str] = {
     "Full Name": "full_name",
@@ -29,77 +28,144 @@ AIRTABLE_COLUMN_MAPPING: dict[str, str] = {
 
 def extract_cv_url(cv_field: Any) -> str | None:
     """Extract URL from CV field in various formats.
-    
+
     Supports:
     1. Airtable API format: List of attachment objects with 'url' key
     2. CSV export format: "filename.pdf (https://...)"
     3. Plain URL string
-    
+
     Args:
         cv_field: The CV field value from Airtable
-        
+
     Returns:
         The extracted URL string, or None if no URL found.
-        
+
     Examples:
         >>> extract_cv_url([{"url": "https://example.com/cv.pdf"}])
         'https://example.com/cv.pdf'
-        
+
         >>> extract_cv_url("resume.pdf (https://example.com/cv.pdf)")
         'https://example.com/cv.pdf'
-        
+
         >>> extract_cv_url("https://example.com/cv.pdf")
         'https://example.com/cv.pdf'
     """
     if cv_field is None:
         return None
-    
+
     # Airtable API format: list of attachment objects
     if isinstance(cv_field, list) and cv_field:
         first_attachment = cv_field[0]
         if isinstance(first_attachment, dict):
             return first_attachment.get("url")
-    
+
     # String formats
     if isinstance(cv_field, str):
         cv_field = cv_field.strip()
-        
+
         # CSV export format: "filename.pdf (https://...)"
-        match = re.search(r'\((https?://[^)]+)\)', cv_field)
+        match = re.search(r"\((https?://[^)]+)\)", cv_field)
         if match:
             return match.group(1)
-        
+
         # Plain URL
         if cv_field.startswith(("http://", "https://")):
             return cv_field
-    
+
     return None
 
 
 def parse_comma_separated(field_value: str | None) -> list[str]:
     """Parse a comma-separated string into a list of trimmed values.
-    
+
     Args:
         field_value: Comma-separated string (e.g., "Python,JavaScript,Rust")
-        
+
     Returns:
         List of trimmed non-empty strings.
-        
+
     Examples:
         >>> parse_comma_separated("Python, JavaScript, Rust")
         ['Python', 'JavaScript', 'Rust']
-        
+
         >>> parse_comma_separated(None)
         []
-        
+
         >>> parse_comma_separated("  One  ,  Two  ,  ")
         ['One', 'Two']
     """
     if not field_value:
         return []
-    
+
     items = field_value.split(",")
     return [item.strip() for item in items if item.strip()]
+
+
+# Column name mapping from Airtable (jobs table, e.g. Customers STT) to RawJob model fields
+AIRTABLE_JOBS_COLUMN_MAPPING: dict[str, str] = {
+    "🔗  Job Description Link": "job_description_link",
+    "Hiring Job Title": "job_title_raw",
+    "Company": "company_name",
+    "Twitter Handle": "x_url",
+    "Website Link": "company_website_url",
+    "Full Name": "hiring_contact_name",
+    "Mail": "hiring_contact_email",
+    # Optional: if table has a text field for pasted job description
+    "Job Description Text": "job_description_text",
+    "Links & details": "job_description_text",
+}
+
+
+def _serialize_airtable_value(value: Any) -> str | None:
+    """Serialize Airtable field value to string for raw job storage (e.g. multi-select -> JSON array string)."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return ",".join(str(v) for v in value) if value else None
+    return str(value) if value else None
+
+
+def map_airtable_row_to_raw_job(
+    record: dict[str, Any],
+    column_mapping: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Map an Airtable record (jobs table) to RawJob-like field names.
+
+    Args:
+        record: Airtable record with 'id', 'fields', 'createdTime'
+        column_mapping: Optional; defaults to AIRTABLE_JOBS_COLUMN_MAPPING.
+
+    Returns:
+        Dictionary with mapped field names and airtable_record_id, source, source_id.
+    """
+    if column_mapping is None:
+        column_mapping = AIRTABLE_JOBS_COLUMN_MAPPING
+
+    fields = record.get("fields", {})
+    mapped: dict[str, Any] = {
+        "airtable_record_id": record.get("id"),
+        "source": "airtable",
+        "source_id": record.get("id"),
+    }
+    for airtable_col, model_field in column_mapping.items():
+        value = fields.get(airtable_col)
+        if value is None:
+            continue
+        if model_field == "job_description_link":
+            mapped[model_field] = (
+                value
+                if isinstance(value, str)
+                else (
+                    value[0].get("url")
+                    if isinstance(value, list) and value and isinstance(value[0], dict)
+                    else None
+                )
+            )
+        elif isinstance(value, list):
+            mapped[model_field] = ",".join(str(v) for v in value) if value else None
+        else:
+            mapped[model_field] = str(value) if value else None
+    return mapped
 
 
 def map_airtable_row_to_raw_candidate(
@@ -107,18 +173,18 @@ def map_airtable_row_to_raw_candidate(
     column_mapping: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Map an Airtable record to RawCandidate model fields.
-    
+
     This function handles the transformation from Airtable's field names
     (e.g., "Full Name", "Professional summary") to our database column names
     (e.g., "full_name", "professional_summary").
-    
+
     Args:
         record: Airtable record with 'id', 'fields', and 'createdTime' keys
         column_mapping: Optional custom column mapping. Defaults to AIRTABLE_COLUMN_MAPPING.
-        
+
     Returns:
         Dictionary with mapped field names suitable for creating a RawCandidate.
-        
+
     Example:
         >>> record = {
         ...     "id": "recXYZ123",
@@ -137,24 +203,24 @@ def map_airtable_row_to_raw_candidate(
     """
     if column_mapping is None:
         column_mapping = AIRTABLE_COLUMN_MAPPING
-    
+
     fields = record.get("fields", {})
-    
+
     # Start with metadata fields
     mapped: dict[str, Any] = {
         "airtable_record_id": record.get("id"),
         "source": "airtable",
         "source_id": record.get("id"),
     }
-    
+
     # Map each Airtable column to our model field
     for airtable_col, model_field in column_mapping.items():
         value = fields.get(airtable_col)
-        
+
         # Apply field-specific transformations
         if model_field == "cv_url":
             value = extract_cv_url(value)
-        
+
         mapped[model_field] = value
-    
+
     return mapped
