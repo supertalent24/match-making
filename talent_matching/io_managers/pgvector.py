@@ -92,7 +92,13 @@ class PgVectorIOManager(ConfigurableIOManager):
         table_name = self._get_table_name(context)
         session = self._get_session()
 
-        partition_key = context.partition_key if hasattr(context, "partition_key") else None
+        # partition_key raises when the run is non-partitioned (e.g. matchmaking job).
+        # Do not use hasattr()—it invokes the property and raises.
+        partition_key = None
+        try:
+            partition_key = context.partition_key
+        except Exception:
+            partition_key = None
 
         if table_name == "candidate_vectors":
             if partition_key:
@@ -107,9 +113,12 @@ class PgVectorIOManager(ConfigurableIOManager):
                     )
                     results = session.execute(stmt).scalars().all()
                 else:
-                    results = []
+                    # No candidate for this key (e.g. job partition key). Fall back to load all.
+                    stmt = select(CandidateVector).limit(150_000)
+                    results = session.execute(stmt).scalars().all()
             else:
-                stmt = select(CandidateVector).limit(1000)
+                # Load all candidate vectors (e.g. 6k+ candidates × many vectors each)
+                stmt = select(CandidateVector).limit(150_000)
                 results = session.execute(stmt).scalars().all()
 
             session.close()
@@ -127,7 +136,7 @@ class PgVectorIOManager(ConfigurableIOManager):
                 else:
                     results = []
             else:
-                stmt = select(JobVector).limit(1000)
+                stmt = select(JobVector).limit(20_000)
                 results = session.execute(stmt).scalars().all()
 
             session.close()

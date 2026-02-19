@@ -5,13 +5,15 @@ This module defines the asset graph for processing jobs and generating matches:
 2. raw_jobs: Resolved job description text (Notion fetch + Airtable mapping), stored in PostgreSQL
 3. normalized_jobs: LLM-normalized job requirements + narratives
 4. job_vectors: Semantic embeddings (experience, domain, personality, impact, technical, role_description)
-5. matches: Computed candidate-job matches (stub; loads from DB when implemented)
+5. matches: Computed candidate-job matches (vector raw 0.4 role + 0.35 domain + 0.25 culture; skill fit 80% rating, 20% semantic when a skill matches; top 20)
 """
 
 import asyncio
+import math
 from typing import Any
 
 from dagster import (
+    AllPartitionMapping,
     AssetExecutionContext,
     AssetIn,
     Config,
@@ -299,68 +301,543 @@ def airtable_job_sync(
     return {"airtable_record_id": record_id, "synced": True, "fields": fields_to_patch}
 
 
+# Notion formula weights: role 40%, domain 35%, culture 25%
+ROLE_WEIGHT = 0.4
+DOMAIN_WEIGHT = 0.35
+CULTURE_WEIGHT = 0.25
+TOP_N_PER_JOB = 20
+ALGORITHM_VERSION = "notion_v2"
+
+# Combined score = weighted blend (40% vector, 40% skill fit, 10% comp, 10% location) − seniority deduction
+VECTOR_WEIGHT = 0.4
+SKILL_FIT_WEIGHT = 0.4
+COMPENSATION_WEIGHT = 0.1
+LOCATION_WEIGHT = 0.1
+# When at least one required skill matches: 80% from rating-based coverage, 20% semantic (tie-breaker)
+SKILL_RATING_WEIGHT = 0.8
+SKILL_SEMANTIC_WEIGHT = 0.2  # only applied when there is at least one matching skill
+SENIORITY_PENALTY_PER_YEAR = 2  # soft penalty points per year short (overall)
+SENIORITY_PENALTY_PER_SKILL_YEAR = 1  # points per skill when candidate years < job min_years
+SENIORITY_PENALTY_CAP = 10  # cap overall years penalty
+SENIORITY_MAX_DEDUCTION = 0.2  # cap deduction from combined (penalty_points/100, max 20%)
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity in [0, 1]. Returns 0 if either vector is zero."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    sim = dot / (norm_a * norm_b)
+    return max(0.0, min(1.0, sim))
+
+
+def _compensation_fit(
+    job_salary_min: float | None,
+    job_salary_max: float | None,
+    cand_comp_min: float | None,
+    cand_comp_max: float | None,
+) -> float:
+    """Overlap of job pay band with candidate expectations; 0-1. Neutral 0.5 if missing."""
+    if (
+        job_salary_min is None
+        or job_salary_max is None
+        or cand_comp_min is None
+        or cand_comp_max is None
+    ):
+        return 0.5
+    if job_salary_max <= job_salary_min:
+        return 0.5
+    overlap_start = max(job_salary_min, cand_comp_min)
+    overlap_end = min(job_salary_max, cand_comp_max)
+    if overlap_end <= overlap_start:
+        return 0.0
+    job_range = job_salary_max - job_salary_min
+    overlap = (overlap_end - overlap_start) / job_range
+    return min(1.0, overlap)
+
+
+def _location_score(
+    candidate_timezone: str | None,
+    job_timezone_requirements: str | None,
+    job_location_type: str | None,
+) -> float:
+    """Timezone overlap 0-1; weighted by location_type (remote=1, hybrid=0.7, onsite=0.5). Neutral 0.5 if missing."""
+    weight = 1.0
+    if job_location_type:
+        lt = (job_location_type or "").strip().lower()
+        if lt == "remote":
+            weight = 1.0
+        elif lt == "hybrid":
+            weight = 0.7
+        else:
+            weight = 0.5
+    if not candidate_timezone and not job_timezone_requirements:
+        return 0.5
+    if not candidate_timezone or not job_timezone_requirements:
+        return 0.5 * weight
+
+    # Simple: parse "UTC-5" / "UTC+3" style; if we can't parse, neutral
+    def parse_tz(s: str) -> float | None:
+        s = s.strip().upper().replace(" ", "")
+        if s.startswith("UTC"):
+            rest = s[3:].strip()
+            if not rest or rest == "0":
+                return 0.0
+            sign = 1 if rest.startswith("+") else -1
+            num = rest.lstrip("+-").split("/")[0].split("-")[0].split("+")[0]
+            if num.isdigit():
+                return sign * float(num)
+        return None
+
+    c_tz = parse_tz(candidate_timezone)
+    j_tz_str = (job_timezone_requirements or "").strip()
+    if " to " in j_tz_str:
+        parts = j_tz_str.split(" to ")
+        j_lo = parse_tz(parts[0]) if parts else None
+        j_hi = parse_tz(parts[1]) if len(parts) > 1 else None
+        j_center = (j_lo + j_hi) / 2 if j_lo is not None and j_hi is not None else j_lo or j_hi
+    else:
+        j_center = parse_tz(j_tz_str)
+    if c_tz is None or j_center is None:
+        return 0.5 * weight
+    diff = abs(c_tz - j_center)
+    overlap = max(0.0, 1.0 - diff / 12.0)
+    return overlap * weight
+
+
+def _skill_coverage_score(
+    req_skills: list[dict[str, Any]],
+    cand_skills_map: dict[str, tuple[float, int | None]],
+) -> float:
+    """0-1: how well candidate skills cover job required skills (name + proficiency).
+
+    Must-have skills have 3x weight of nice-to-have. Missing skill contributes 0
+    for that component (no separate flat penalty).
+    """
+    if not req_skills:
+        return 1.0
+    total_weight = 0.0
+    scored = 0.0
+    for s in req_skills:
+        name = (s.get("skill_name") or "").strip()
+        if not name:
+            continue
+        req_type = s.get("requirement_type") or "must_have"
+        w = 3.0 if req_type == "must_have" else 1.0
+        total_weight += w
+        rating, _years = cand_skills_map.get(name, (0.0, None))
+        scored += (rating / 10.0) * w
+    if total_weight == 0:
+        return 1.0
+    return min(1.0, scored / total_weight)
+
+
+def _skill_semantic_score(
+    job_role_vec: list[float] | None,
+    cand_skill_vecs: dict[str, list[float]],
+) -> float:
+    """0-1: max similarity of job role_description to candidate skill_* vectors."""
+    if not job_role_vec:
+        return 0.5
+    skill_keys = [k for k in cand_skill_vecs if k.startswith("skill_")]
+    if not skill_keys:
+        return 0.0
+    sims = [_cosine_similarity(job_role_vec, cand_skill_vecs[k]) for k in skill_keys]
+    return max(sims) if sims else 0.0
+
+
+def _seniority_penalty_and_experience_score(
+    job_min_years: int | None,
+    job_max_years: int | None,
+    cand_years: int | None,
+    req_skills_with_min_years: list[tuple[str, int, str]],
+    cand_skills_map: dict[str, tuple[float, int | None]],
+) -> tuple[float, float]:
+    """Returns (penalty_points, experience_match_score 0-1)."""
+    penalty = 0.0
+    if job_min_years is not None and cand_years is not None and cand_years < job_min_years:
+        short = job_min_years - cand_years
+        penalty += min(SENIORITY_PENALTY_CAP, short * SENIORITY_PENALTY_PER_YEAR)
+    for skill_name, min_years, req_type in req_skills_with_min_years:
+        _, cand_y = cand_skills_map.get(skill_name, (0.0, None))
+        if cand_y is not None and min_years is not None and cand_y < min_years:
+            penalty += (min_years - cand_y) * SENIORITY_PENALTY_PER_SKILL_YEAR
+    max_penalty = SENIORITY_PENALTY_CAP + 5 * SENIORITY_PENALTY_PER_SKILL_YEAR
+    experience_match_score = max(0.0, 1.0 - penalty / max_penalty) if max_penalty else 1.0
+    return penalty, experience_match_score
+
+
 @asset(
+    partitions_def=job_partitions,
     ins={
-        "normalized_candidates": AssetIn(key=["normalized_candidates"]),
-        "candidate_vectors": AssetIn(key=["candidate_vectors"]),
+        "normalized_candidates": AssetIn(
+            key=["normalized_candidates"],
+            partition_mapping=AllPartitionMapping(),
+        ),
+        "candidate_vectors": AssetIn(
+            key=["candidate_vectors"],
+            partition_mapping=AllPartitionMapping(),
+        ),
         "normalized_jobs": AssetIn(),
         "job_vectors": AssetIn(),
     },
-    description="Computed matches between jobs and candidates with scores",
+    description="Computed matches between jobs and candidates with scores (one partition per job)",
     group_name="matching",
-    code_version="1.0.0",  # Bump when scoring logic or weights change
+    code_version="2.1.0",  # raw vector (no rescaling); skill fit 80% rating, 20% semantic only when skill matches
+    io_manager_key="postgres_io",
+    required_resource_keys={"matchmaking"},
     metadata={
         "table": "matches",
-        "scoring_weights": {"keyword": 0.4, "vector": 0.6},
+        "scoring_weights": {
+            "role": ROLE_WEIGHT,
+            "domain": DOMAIN_WEIGHT,
+            "culture": CULTURE_WEIGHT,
+        },
     },
 )
 def matches(
     context: AssetExecutionContext,
-    normalized_candidates: list[dict[str, Any]],
-    candidate_vectors: list[dict[str, Any]],
-    normalized_jobs: list[dict[str, Any]],
-    job_vectors: list[dict[str, Any]],
+    normalized_candidates: Any,
+    candidate_vectors: Any,
+    normalized_jobs: Any,
+    job_vectors: Any,
 ) -> list[dict[str, Any]]:
-    """Compute matches between jobs and candidates.
+    """Compute matches: vector_score (role/domain/culture) + skill penalty, top 20 per job.
 
-    In the full implementation, this asset would:
-    1. Apply hard filters (years of experience, must-have skills)
-    2. Calculate keyword match score (40% weight)
-    3. Calculate vector similarity score (60% weight)
-    4. Rank candidates and return top 50 per job
-
-    Scoring formula:
-    - keyword_score = (must_have_coverage * 0.6) + (nice_to_have_coverage * 0.4)
-    - vector_score = weighted cosine similarity across vector types
-    - final_score = (keyword_score * 0.4) + (vector_score * 0.6)
-
-    For now, returns mock match data.
+    Optional (deferred): pre-filter to candidates with candidate_role_fitness.fitness_score >= 60
+    for a role matching the job; see plan matchmaking_scoring_and_shortlist.
     """
-    context.log.info("Computing matches (stub implementation)")
-    context.log.info(f"  Candidates: {len(normalized_candidates)}")
-    context.log.info(f"  Candidate vectors: {len(candidate_vectors)}")
-    context.log.info(f"  Jobs: {len(normalized_jobs)}")
-    context.log.info(f"  Job vectors: {len(job_vectors)}")
+    context.log.info(
+        f"Computing matches for job partition {context.partition_key} (vector + skill penalty, top 20 per job)"
+    )
 
-    # Mock match output
-    match_results = []
+    # AllPartitionMapping yields dict[partition_key, value]; value per partition is what IO manager returned (dict or list)
+    def _to_candidate_list(x: Any) -> list[dict[str, Any]]:
+        if x is None:
+            return []
+        if isinstance(x, dict):
+            out = []
+            for v in x.values():
+                if isinstance(v, dict) and v:
+                    out.append(v)
+                elif isinstance(v, list):
+                    out.extend(i for i in v if isinstance(i, dict))
+            return out
+        if isinstance(x, list):
+            return [item for item in x if isinstance(item, dict)]
+        return [x] if isinstance(x, dict) else []
+
+    def _to_vector_list(x: Any) -> list[dict[str, Any]]:
+        if x is None:
+            return []
+        if isinstance(x, dict):
+            flat = []
+            for v in x.values():
+                if isinstance(v, list):
+                    flat.extend(v for item in v if isinstance(item, dict))
+                elif isinstance(v, dict):
+                    flat.append(v)
+            return flat
+        if isinstance(x, list):
+            flat = []
+            for item in x:
+                if isinstance(item, list):
+                    flat.extend(i for i in item if isinstance(i, dict))
+                elif isinstance(item, dict):
+                    flat.append(item)
+            return flat
+        return [x] if isinstance(x, dict) else []
+
+    normalized_candidates = _to_candidate_list(normalized_candidates)
+    candidate_vectors = _to_vector_list(candidate_vectors)
+    if not normalized_jobs or not normalized_candidates:
+        context.log.info("No jobs or candidates; skipping")
+        return []
+
+    # Normalize job/vector inputs (single partition: dict or list)
+    if isinstance(normalized_jobs, dict):
+        normalized_jobs = [normalized_jobs]
+    if isinstance(job_vectors, dict):
+        job_vectors = [job_vectors]
+    flat_jv = []
+    for x in job_vectors or []:
+        flat_jv.extend(x if isinstance(x, list) else [x])
+    job_vectors = flat_jv
+
+    # Build index: raw_job_id -> {role_description, domain, personality} vectors
+    job_vecs_by_raw: dict[str, dict[str, list[float]]] = {}
+    for rec in job_vectors:
+        raw_id = str(rec.get("job_id", ""))
+        if not raw_id:
+            continue
+        if raw_id not in job_vecs_by_raw:
+            job_vecs_by_raw[raw_id] = {}
+        vt = rec.get("vector_type") or ""
+        vec = rec.get("vector")
+        if vec is not None and vt:
+            job_vecs_by_raw[raw_id][vt] = vec
+
+    # Build index: raw_candidate_id -> {position_0, position_1, ..., domain, personality}
+    cand_vecs_by_raw: dict[str, dict[str, list[float]]] = {}
+    for rec in candidate_vectors:
+        raw_id = str(rec.get("candidate_id", ""))
+        if not raw_id:
+            continue
+        if raw_id not in cand_vecs_by_raw:
+            cand_vecs_by_raw[raw_id] = {}
+        vt = rec.get("vector_type") or ""
+        vec = rec.get("vector")
+        if vec is not None and vt:
+            cand_vecs_by_raw[raw_id][vt] = vec
+
+    # Normalized id lookup (postgres load uses column name "id")
+    job_ids = [str(j.get("id", "")) for j in normalized_jobs if j.get("id")]
+    cand_ids = [str(c.get("id", "")) for c in normalized_candidates if c.get("id")]
+    job_required_skills = context.resources.matchmaking.get_job_required_skills(job_ids)
+    candidate_skills_map = context.resources.matchmaking.get_candidate_skills(cand_ids)
+
+    match_results: list[dict[str, Any]] = []
     for job in normalized_jobs:
+        job_id_norm = job.get("id")
+        raw_job_id = str(job.get("raw_job_id", ""))
+        if not job_id_norm or not raw_job_id:
+            continue
+        jvecs = job_vecs_by_raw.get(raw_job_id, {})
+        job_role_vec = jvecs.get("role_description")
+        job_domain_vec = jvecs.get("domain")
+        job_personality_vec = jvecs.get("personality")
+        req_skills = job_required_skills.get(str(job_id_norm), [])
+        must_have = [
+            s["skill_name"] for s in req_skills if s.get("requirement_type") == "must_have"
+        ]
+        nice_to_have = [
+            s["skill_name"] for s in req_skills if s.get("requirement_type") == "nice_to_have"
+        ]
+        req_skills_with_min_years = [
+            (s["skill_name"], int(s["min_years"]), s.get("requirement_type") or "must_have")
+            for s in req_skills
+            if s.get("min_years") is not None
+        ]
+        job_min_years = job.get("min_years_experience")
+        if job_min_years is not None and not isinstance(job_min_years, int):
+            job_min_years = int(job_min_years) if job_min_years else None
+        job_salary_min = job.get("salary_min")
+        job_salary_max = job.get("salary_max")
+        if job_salary_min is not None and not isinstance(job_salary_min, int | float):
+            job_salary_min = float(job_salary_min) if job_salary_min else None
+        if job_salary_max is not None and not isinstance(job_salary_max, int | float):
+            job_salary_max = float(job_salary_max) if job_salary_max else None
+        job_location_type = job.get("location_type")
+        job_timezone = job.get("timezone_requirements")
+
+        # Per (job, candidate) raw scores; then we rescale vector_score per job
+        rows: list[
+            tuple[
+                float,
+                float,
+                float,
+                float,
+                float,
+                float,
+                float,
+                float,
+                float,
+                list[str],
+                list[str],
+                dict[str, str],
+            ]
+        ] = []
         for candidate in normalized_candidates:
+            cand_id_norm = candidate.get("id")
+            raw_cand_id = str(candidate.get("raw_candidate_id", ""))
+            if not cand_id_norm or not raw_cand_id:
+                continue
+            cvecs = cand_vecs_by_raw.get(raw_cand_id, {})
+
+            # role_sim: job role_description vs best of candidate position_*
+            position_keys = [k for k in cvecs if k.startswith("position_")]
+            if job_role_vec and position_keys:
+                role_sim = max(_cosine_similarity(job_role_vec, cvecs[k]) for k in position_keys)
+            elif job_role_vec and cvecs.get("experience"):
+                role_sim = _cosine_similarity(job_role_vec, cvecs["experience"])
+            else:
+                role_sim = 0.0
+
+            domain_sim = (
+                _cosine_similarity(job_domain_vec, cvecs["domain"])
+                if job_domain_vec and cvecs.get("domain")
+                else 0.0
+            )
+            culture_sim = (
+                _cosine_similarity(job_personality_vec, cvecs["personality"])
+                if job_personality_vec and cvecs.get("personality")
+                else 0.0
+            )
+
+            vector_score = (
+                ROLE_WEIGHT * role_sim + DOMAIN_WEIGHT * domain_sim + CULTURE_WEIGHT * culture_sim
+            )
+
+            cand_skills_list = candidate_skills_map.get(str(cand_id_norm), [])
+            cand_skills_map_for_cand: dict[str, tuple[float, int | None]] = {}
+            for cs in cand_skills_list:
+                name = (cs.get("skill_name") or "").strip()
+                if name:
+                    cand_skills_map_for_cand[name] = (
+                        (cs.get("rating") or 5) / 10.0,
+                        cs.get("years_experience"),
+                    )
+
+            candidate_skill_names = set(cand_skills_map_for_cand.keys())
+            missing_must = [s for s in must_have if s not in candidate_skill_names]
+            missing_nice = [s for s in nice_to_have if s not in candidate_skill_names]
+            matching = [s for s in must_have + nice_to_have if s in candidate_skill_names]
+
+            skill_coverage = _skill_coverage_score(req_skills, cand_skills_map_for_cand)
+            skill_semantic = _skill_semantic_score(job_role_vec, cvecs)
+            # Semantic only when at least one skill matches; then 80% rating, 20% semantic (tie-breaker)
+            if matching:
+                skill_fit_score = (
+                    SKILL_RATING_WEIGHT * skill_coverage + SKILL_SEMANTIC_WEIGHT * skill_semantic
+                )
+            else:
+                skill_fit_score = skill_coverage
+
+            cand_years = candidate.get("years_of_experience")
+            if cand_years is not None and not isinstance(cand_years, int):
+                cand_years = int(cand_years) if cand_years else None
+            seniority_penalty, experience_match_score = _seniority_penalty_and_experience_score(
+                job_min_years,
+                job.get("max_years_experience"),
+                cand_years,
+                req_skills_with_min_years,
+                cand_skills_map_for_cand,
+            )
+
+            comp_min = candidate.get("compensation_min")
+            comp_max = candidate.get("compensation_max")
+            if comp_min is not None and not isinstance(comp_min, int | float):
+                comp_min = float(comp_min) if comp_min else None
+            if comp_max is not None and not isinstance(comp_max, int | float):
+                comp_max = float(comp_max) if comp_max else None
+            compensation_match_score = _compensation_fit(
+                job_salary_min,
+                job_salary_max,
+                comp_min,
+                comp_max,
+            )
+
+            cand_timezone = candidate.get("timezone")
+            location_match_score = _location_score(cand_timezone, job_timezone, job_location_type)
+
+            rows.append(
+                (
+                    vector_score,
+                    role_sim,
+                    domain_sim,
+                    culture_sim,
+                    skill_fit_score,
+                    seniority_penalty,
+                    compensation_match_score,
+                    experience_match_score,
+                    location_match_score,
+                    matching,
+                    missing_must + missing_nice,
+                    {"candidate_id": str(cand_id_norm), "job_id": str(job_id_norm)},
+                )
+            )
+
+        scored: list[
+            tuple[
+                float,
+                float,
+                float,
+                float,
+                float,
+                float,
+                float,
+                float,
+                list[str],
+                list[str],
+                dict[str, str],
+            ]
+        ] = []
+        for r in rows:
+            (
+                v_raw,
+                role_sim,
+                domain_sim,
+                culture_sim,
+                skill_fit,
+                sen_pen,
+                comp_score,
+                exp_score,
+                loc_score,
+                matching,
+                missing,
+                ids,
+            ) = r
+            # Use raw vector score (no per-job min-max rescaling)
+            base = (
+                VECTOR_WEIGHT * v_raw
+                + SKILL_FIT_WEIGHT * skill_fit
+                + COMPENSATION_WEIGHT * comp_score
+                + LOCATION_WEIGHT * loc_score
+            )
+            seniority_deduction = min(SENIORITY_MAX_DEDUCTION, sen_pen / 100.0)
+            combined_01 = max(0.0, min(1.0, base - seniority_deduction))
+            scored.append(
+                (
+                    combined_01,
+                    role_sim,
+                    domain_sim,
+                    culture_sim,
+                    skill_fit,
+                    comp_score,
+                    exp_score,
+                    loc_score,
+                    matching,
+                    missing,
+                    ids,
+                )
+            )
+
+        scored.sort(key=lambda t: t[0], reverse=True)
+        for rank, (
+            combined_01,
+            role_sim,
+            domain_sim,
+            culture_sim,
+            skill_fit,
+            comp_score,
+            exp_score,
+            loc_score,
+            matching,
+            missing,
+            ids,
+        ) in enumerate(scored[:TOP_N_PER_JOB], start=1):
             match_results.append(
                 {
-                    "job_id": job["job_id"],
-                    "candidate_id": candidate["candidate_id"],
-                    "match_score": 0.75,  # Mock score
-                    "keyword_score": 0.70,
-                    "vector_score": 0.78,
-                    "breakdown": {
-                        "must_have_coverage": 0.80,
-                        "nice_to_have_coverage": 0.50,
-                        "experience_similarity": 0.85,
-                        "domain_similarity": 0.70,
-                    },
+                    "job_id": ids["job_id"],
+                    "candidate_id": ids["candidate_id"],
+                    "match_score": round(combined_01, 6),
+                    "role_similarity_score": round(role_sim, 6),
+                    "domain_similarity_score": round(domain_sim, 6),
+                    "culture_similarity_score": round(culture_sim, 6),
+                    "skills_match_score": round(skill_fit, 6),
+                    "compensation_match_score": round(comp_score, 6),
+                    "experience_match_score": round(exp_score, 6),
+                    "location_match_score": round(loc_score, 6),
+                    "matching_skills": matching or None,
+                    "missing_skills": missing if missing else None,
+                    "rank": rank,
+                    "algorithm_version": ALGORITHM_VERSION,
                 }
             )
 
-    context.log.info(f"Computed {len(match_results)} matches")
+    context.log.info(f"Computed {len(match_results)} matches ({TOP_N_PER_JOB} per job)")
     return match_results

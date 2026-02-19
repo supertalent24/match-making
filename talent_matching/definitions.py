@@ -25,6 +25,7 @@ from talent_matching.jobs import (
     candidate_pipeline_job,
     job_ingest_job,
     job_pipeline_job,
+    matchmaking_job,
     sample_candidates_job,
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
@@ -34,6 +35,7 @@ from talent_matching.resources import (
     AirtableResource,
     GitHubAPIResource,
     LinkedInAPIResource,
+    MatchmakingResource,
     NotionResource,
     OpenRouterResource,
     TwitterAPIResource,
@@ -101,6 +103,13 @@ dev_resources = {
         password=EnvVar("POSTGRES_PASSWORD"),
         database=EnvVar("POSTGRES_DB"),
     ),
+    "matchmaking": MatchmakingResource(
+        host=EnvVar("POSTGRES_HOST"),
+        port=EnvVar.int("POSTGRES_PORT"),
+        user=EnvVar("POSTGRES_USER"),
+        password=EnvVar("POSTGRES_PASSWORD"),
+        database=EnvVar("POSTGRES_DB"),
+    ),
 }
 
 
@@ -127,6 +136,7 @@ all_jobs = [
     candidate_ingest_job,
     job_pipeline_job,
     job_ingest_job,
+    matchmaking_job,
     # Ops jobs (non-partitioned)
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,

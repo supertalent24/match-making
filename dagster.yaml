@@ -57,6 +57,12 @@ run_launcher:
   module: dagster.core.launcher
   class: DefaultRunLauncher
 
+# Concurrency: limit concurrent ops per pool (e.g. openrouter_api)
+# Ops tagged with dagster/concurrency_key use this default until overridden in UI/CLI
+concurrency:
+  pools:
+    default_limit: 50
+
 # Telemetry (disabled for privacy)
 telemetry:
   enabled: false

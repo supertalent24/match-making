@@ -27,6 +27,7 @@ from talent_matching.models.candidates import (
     CandidateAttribute,
     CandidateExperience,
     CandidateProject,
+    CandidateRoleFitness,
     CandidateSkill,
 )
 from talent_matching.models.enums import (
@@ -243,7 +244,9 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         elif table_name == "normalized_jobs":
             self._store_normalized_job(context, obj)
         elif table_name == "matches":
-            self._store_match(context, obj)
+            self._store_matches(context, obj if isinstance(obj, list) else [obj])
+        elif table_name == "candidate_role_fitness":
+            self._store_candidate_role_fitness(context, obj if isinstance(obj, list) else [obj])
         else:
             context.log.warning(f"Unknown asset type: {table_name}")
 
@@ -275,8 +278,13 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             session.close()
             return None
 
-        # For partitioned assets, load by partition key
-        partition_key = context.partition_key if hasattr(context, "partition_key") else None
+        # For partitioned assets, load by partition key.
+        # Do not use hasattr()—it invokes the property and can raise on non-partitioned runs.
+        partition_key = None
+        try:
+            partition_key = context.partition_key
+        except Exception:
+            partition_key = None
 
         if partition_key:
             # Partitioned asset - return single record by airtable_record_id
@@ -288,14 +296,23 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
                 return None
 
             result = session.execute(stmt).scalar_one_or_none()
-            session.close()
-
             if result:
+                session.close()
                 return self._model_to_dict(result)
-            return None
+            # No row for this partition key (e.g. job partition key passed to normalized_candidates).
+            # Fall back to load-all for tables used as "all partitions" by downstream (e.g. matches).
+            if table_name == "normalized_candidates":
+                session.close()
+                session = self._get_session()
+                stmt = select(model).limit(20_000)
+                results = session.execute(stmt).scalars().all()
+                session.close()
+                return [self._model_to_dict(r) for r in results]
+            session.close()
+            return []
         else:
-            # Non-partitioned - load all records (with limit for safety)
-            stmt = select(model).limit(1000)
+            # Non-partitioned - load all records (limit allows 20k e.g. normalized_candidates)
+            stmt = select(model).limit(20_000)
             results = session.execute(stmt).scalars().all()
             session.close()
             return [self._model_to_dict(r) for r in results]
@@ -1099,39 +1116,95 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
 
         context.log.info(f"Upserted normalized job: {record_id}")
 
-    def _store_match(self, context: OutputContext, data: dict[str, Any]) -> None:
-        """Store match data using SQLAlchemy ORM."""
+    def _store_matches(self, context: OutputContext, records: list[dict[str, Any]]) -> None:
+        """Store match data (list of match dicts) using SQLAlchemy ORM."""
+        if not records:
+            context.log.info("No matches to store")
+            return
         session = self._get_session()
-
-        values = {
-            "candidate_id": data.get("candidate_id"),
-            "job_id": data.get("job_id"),
-            "match_score": data.get("match_score", 0.0),
-            "skills_match_score": data.get("skills_match_score"),
-            "experience_match_score": data.get("experience_match_score"),
-            "compensation_match_score": data.get("compensation_match_score"),
-            "location_match_score": data.get("location_match_score"),
-            "matching_skills": data.get("matching_skills"),
-            "missing_skills": data.get("missing_skills"),
-            "match_reasoning": data.get("match_reasoning"),
-            "algorithm_version": data.get("algorithm_version"),
+        float_keys = {
+            "match_score",
+            "skills_match_score",
+            "experience_match_score",
+            "compensation_match_score",
+            "location_match_score",
+            "role_similarity_score",
+            "domain_similarity_score",
+            "culture_similarity_score",
         }
-
-        stmt = insert(Match).values(**values)
-        stmt = stmt.on_conflict_do_update(
-            constraint="uq_candidate_job",
-            set_={
-                "match_score": stmt.excluded.match_score,
-                "skills_match_score": stmt.excluded.skills_match_score,
-                "experience_match_score": stmt.excluded.experience_match_score,
-                "match_reasoning": stmt.excluded.match_reasoning,
-            },
-        )
-
-        session.execute(stmt)
+        for data in records:
+            values = {
+                "candidate_id": data.get("candidate_id"),
+                "job_id": data.get("job_id"),
+                "match_score": data.get("match_score", 0.0),
+                "skills_match_score": data.get("skills_match_score"),
+                "experience_match_score": data.get("experience_match_score"),
+                "compensation_match_score": data.get("compensation_match_score"),
+                "location_match_score": data.get("location_match_score"),
+                "role_similarity_score": data.get("role_similarity_score"),
+                "domain_similarity_score": data.get("domain_similarity_score"),
+                "culture_similarity_score": data.get("culture_similarity_score"),
+                "matching_skills": data.get("matching_skills"),
+                "missing_skills": data.get("missing_skills"),
+                "match_reasoning": data.get("match_reasoning"),
+                "rank": data.get("rank"),
+                "algorithm_version": data.get("algorithm_version"),
+            }
+            for k in float_keys:
+                v = values.get(k)
+                if v is not None:
+                    values[k] = float(v)
+            stmt = insert(Match).values(**values)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_candidate_job",
+                set_={
+                    "match_score": stmt.excluded.match_score,
+                    "skills_match_score": stmt.excluded.skills_match_score,
+                    "experience_match_score": stmt.excluded.experience_match_score,
+                    "compensation_match_score": stmt.excluded.compensation_match_score,
+                    "location_match_score": stmt.excluded.location_match_score,
+                    "role_similarity_score": stmt.excluded.role_similarity_score,
+                    "domain_similarity_score": stmt.excluded.domain_similarity_score,
+                    "culture_similarity_score": stmt.excluded.culture_similarity_score,
+                    "matching_skills": stmt.excluded.matching_skills,
+                    "missing_skills": stmt.excluded.missing_skills,
+                    "match_reasoning": stmt.excluded.match_reasoning,
+                    "rank": stmt.excluded.rank,
+                    "algorithm_version": stmt.excluded.algorithm_version,
+                },
+            )
+            session.execute(stmt)
         session.commit()
         session.close()
+        context.log.info(f"Stored {len(records)} matches")
 
-        context.log.info(
-            f"Stored match: candidate={data.get('candidate_id')}, job={data.get('job_id')}"
-        )
+    def _store_candidate_role_fitness(
+        self, context: OutputContext, records: list[dict[str, Any]]
+    ) -> None:
+        """Store candidate_role_fitness rows; replace all for the candidate(s) in the list."""
+        if not records:
+            context.log.info("No candidate_role_fitness records to store")
+            return
+        session = self._get_session()
+        candidate_ids = {r.get("candidate_id") for r in records if r.get("candidate_id")}
+        for cid in candidate_ids:
+            session.execute(
+                delete(CandidateRoleFitness).where(
+                    CandidateRoleFitness.candidate_id == UUID(str(cid))
+                )
+            )
+        for data in records:
+            cid = data.get("candidate_id")
+            if not cid:
+                continue
+            stmt = insert(CandidateRoleFitness).values(
+                candidate_id=UUID(str(cid)),
+                role_name=data.get("role_name", ""),
+                fitness_score=float(data.get("fitness_score", 0.0)),
+                score_breakdown=data.get("score_breakdown"),
+                algorithm_version=data.get("algorithm_version"),
+            )
+            session.execute(stmt)
+        session.commit()
+        session.close()
+        context.log.info(f"Stored {len(records)} candidate_role_fitness rows")

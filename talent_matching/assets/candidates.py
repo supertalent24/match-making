@@ -11,6 +11,7 @@ enabling incremental processing and per-record change tracking.
 """
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -550,3 +551,70 @@ def candidate_vectors(
         )
 
     return vectors
+
+
+# Algorithm version for candidate_role_fitness (bump when prompt or logic changes)
+ROLE_FITNESS_ALGORITHM_VERSION = "notion_v1"
+
+
+@asset(
+    partitions_def=candidate_partitions,
+    ins={"normalized_candidates": AssetIn()},
+    description="LLM fitness score per candidate per desired job category (1-100 → stored 0-1)",
+    group_name="candidates",
+    io_manager_key="postgres_io",
+    required_resource_keys={"openrouter"},
+    code_version="1.0.0",
+    op_tags={"dagster/concurrency_key": "openrouter_api"},
+    metadata={"table": "candidate_role_fitness"},
+)
+def candidate_role_fitness(
+    context: AssetExecutionContext,
+    normalized_candidates: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Score each desired_job_category for this candidate; store in candidate_role_fitness."""
+    from talent_matching.llm.operations.score_role_fitness import score_role_fitness
+
+    record_id = context.partition_key
+    candidate_id = normalized_candidates.get("id")
+    if not candidate_id:
+        context.log.warning(f"No normalized candidate id for partition {record_id}")
+        return []
+    roles = normalized_candidates.get("desired_job_categories") or []
+    if not roles:
+        context.log.info(f"No desired_job_categories for {record_id}; skipping role fitness")
+        return []
+
+    # Build a compact profile for the LLM (skills, experience, seniority)
+    normalized_json = normalized_candidates.get("normalized_json") or {}
+    profile = {
+        "skills_summary": normalized_candidates.get("skills_summary"),
+        "years_of_experience": normalized_candidates.get("years_of_experience"),
+        "seniority_level": normalized_candidates.get("seniority_level"),
+        "professional_summary": normalized_candidates.get("professional_summary"),
+        "current_role": normalized_candidates.get("current_role"),
+        "notable_achievements": normalized_candidates.get("notable_achievements"),
+        "skills": normalized_json.get("skills", [])[:20],
+        "experience": (normalized_json.get("experience") or [])[:5],
+    }
+
+    openrouter = context.resources.openrouter
+    results = []
+    for role_name in roles:
+        if not role_name or not str(role_name).strip():
+            continue
+        role_name = str(role_name).strip()
+        out = asyncio.run(score_role_fitness(openrouter, profile, role_name))
+        score_1_100 = out["fitness_score"]
+        reasoning = out.get("reasoning", "")
+        results.append(
+            {
+                "candidate_id": str(candidate_id),
+                "role_name": role_name,
+                "fitness_score": round(score_1_100 / 100.0, 6),
+                "score_breakdown": json.dumps({"reasoning": reasoning}),
+                "algorithm_version": ROLE_FITNESS_ALGORITHM_VERSION,
+            }
+        )
+    context.log.info(f"Computed {len(results)} role fitness scores for {record_id}")
+    return results

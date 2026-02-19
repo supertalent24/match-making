@@ -1,6 +1,7 @@
 """Dagster assets for the talent matching pipeline."""
 
 from talent_matching.assets.candidates import (
+    candidate_role_fitness,
     candidate_vectors,
     normalized_candidates,
     raw_candidates,
@@ -23,6 +24,7 @@ __all__ = [
     "raw_candidates",
     "normalized_candidates",
     "candidate_vectors",
+    "candidate_role_fitness",
     # Job assets
     "raw_jobs",
     "normalized_jobs",

@@ -3,6 +3,7 @@
 from talent_matching.resources.airtable import AirtableJobsResource, AirtableResource
 from talent_matching.resources.github import GitHubAPIResource
 from talent_matching.resources.linkedin import LinkedInAPIResource
+from talent_matching.resources.matchmaking import MatchmakingResource
 from talent_matching.resources.notion import NotionResource
 from talent_matching.resources.openrouter import OpenRouterResource
 from talent_matching.resources.twitter import TwitterAPIResource
@@ -13,6 +14,7 @@ __all__ = [
     "GitHubAPIResource",
     "TwitterAPIResource",
     "LinkedInAPIResource",
+    "MatchmakingResource",
     "NotionResource",
     "OpenRouterResource",
 ]

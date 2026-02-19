@@ -30,6 +30,7 @@ from dagster import (
 from talent_matching.assets.candidates import (
     airtable_candidates,
     candidate_partitions,
+    candidate_role_fitness,
     candidate_vectors,
     normalized_candidates,
     raw_candidates,
@@ -39,6 +40,7 @@ from talent_matching.assets.jobs import (
     airtable_jobs,
     job_partitions,
     job_vectors,
+    matches,
     normalized_jobs,
     raw_jobs,
 )
@@ -60,7 +62,7 @@ candidate_pipeline_job = define_asset_job(
     name="candidate_pipeline",
     description=(
         "Process candidates through the full pipeline: "
-        "fetch → store → normalize (LLM) → vectorize. "
+        "fetch → store → normalize (LLM) → vectorize → role fitness. "
         "Use Backfill to select partitions."
     ),
     selection=[
@@ -68,6 +70,7 @@ candidate_pipeline_job = define_asset_job(
         raw_candidates,
         normalized_candidates,
         candidate_vectors,
+        candidate_role_fitness,
     ],
     partitions_def=candidate_partitions,
     # Retry on failures (rate limits, transient API errors)
@@ -116,6 +119,16 @@ job_ingest_job = define_asset_job(
         airtable_jobs,
         raw_jobs,
     ],
+    partitions_def=job_partitions,
+)
+
+matchmaking_job = define_asset_job(
+    name="matchmaking",
+    description=(
+        "Compute job–candidate matches (scoring) per job. One partition per job; run "
+        "after job_pipeline and candidate_pipeline backfills. Backfill to select job partitions."
+    ),
+    selection=[matches],
     partitions_def=job_partitions,
 )
 
@@ -280,6 +293,7 @@ __all__ = [
     "candidate_ingest_job",
     "job_pipeline_job",
     "job_ingest_job",
+    "matchmaking_job",
     "sync_airtable_candidates_job",
     "sync_airtable_jobs_job",
     "sample_candidates_job",
