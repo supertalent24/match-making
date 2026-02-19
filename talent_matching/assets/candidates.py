@@ -202,7 +202,7 @@ def raw_candidates(
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="postgres_io",
-    code_version="2.0.0",  # v2.0.0: Add narratives for pure prose vectorization
+    code_version="2.1.0",  # v2.1.0: (bump for normalization/storage changes)
     op_tags={
         "dagster/concurrency_key": "openrouter_api",
     },
@@ -253,7 +253,10 @@ def normalized_candidates(
     if raw_candidates.get("desired_job_categories_raw"):
         airtable_parts.append(f"Desired Roles: {raw_candidates['desired_job_categories_raw']}")
     if raw_candidates.get("salary_range_raw"):
-        airtable_parts.append(f"Salary Expectations: {raw_candidates['salary_range_raw']}")
+        airtable_parts.append(
+            "Salary Expectations (interpret 'k' as thousands, e.g. 60-70k = 60,000-70,000 yearly): "
+            f"{raw_candidates['salary_range_raw']}"
+        )
     # Social profiles (helps LLM extract handles)
     if raw_candidates.get("github_url"):
         airtable_parts.append(f"GitHub: {raw_candidates['github_url']}")

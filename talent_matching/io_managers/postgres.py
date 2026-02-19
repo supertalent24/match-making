@@ -153,19 +153,17 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         return path if path else None
 
     def _parse_salary_range(self, salary_raw: str | None) -> tuple[int | None, int | None, str]:
-        """Parse salary range string into min, max, and currency.
+        """Parse salary range string into min, max, and currency (always yearly amounts).
 
         Handles formats like:
         - "$15,000 - $60,000"
         - "15000-60000"
         - "$50k - $80k"
+        - "60-70k" or "60k-70k" (both numbers in thousands; output 60000, 70000)
         - "€40,000 - €60,000"
 
-        Args:
-            salary_raw: Raw salary string from Airtable
-
-        Returns:
-            Tuple of (min_salary, max_salary, currency)
+        Important: When the string contains "k" or "K", any bare number in the range
+        is treated as thousands (e.g. "60-70k" means 60,000–70,000 per year, not 60–70).
         """
         import re
 
@@ -181,19 +179,24 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
 
         # Remove currency symbols and commas, normalize
         cleaned = re.sub(r"[$€£,]", "", salary_raw)
+        has_k = "k" in salary_raw.lower()
 
-        # Handle "k" notation (e.g., "50k")
+        # Handle "k" notation (e.g., "50k" -> 50000)
         cleaned = re.sub(
             r"(\d+)k", lambda m: str(int(m.group(1)) * 1000), cleaned, flags=re.IGNORECASE
         )
 
         # Find all numbers
-        numbers = re.findall(r"\d+", cleaned)
+        numbers = [int(n) for n in re.findall(r"\d+", cleaned)]
+
+        # If string contained "k", any number still below 1000 was a bare "60" in "60-70k"
+        if has_k and numbers:
+            numbers = [n * 1000 if n < 1000 else n for n in numbers]
 
         if len(numbers) >= 2:
-            return int(numbers[0]), int(numbers[1]), currency
-        elif len(numbers) == 1:
-            return int(numbers[0]), int(numbers[0]), currency
+            return numbers[0], numbers[1], currency
+        if len(numbers) == 1:
+            return numbers[0], numbers[0], currency
 
         return None, None, currency
 
@@ -1117,11 +1120,22 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         context.log.info(f"Upserted normalized job: {record_id}")
 
     def _store_matches(self, context: OutputContext, records: list[dict[str, Any]]) -> None:
-        """Store match data (list of match dicts) using SQLAlchemy ORM."""
+        """Store match data (list of match dicts) using SQLAlchemy ORM.
+
+        Replaces all existing matches for this job: deletes by job_id then inserts
+        the new list (one partition = one job, so all records share the same job_id).
+        """
         if not records:
             context.log.info("No matches to store")
             return
         session = self._get_session()
+        job_id_raw = records[0].get("job_id")
+        if job_id_raw is not None:
+            job_id = UUID(str(job_id_raw)) if not isinstance(job_id_raw, UUID) else job_id_raw
+            deleted = session.execute(delete(Match).where(Match.job_id == job_id))
+            context.log.info(
+                f"Deleted existing matches for job_id={job_id} (rowcount={deleted.rowcount})"
+            )
         float_keys = {
             "match_score",
             "skills_match_score",
