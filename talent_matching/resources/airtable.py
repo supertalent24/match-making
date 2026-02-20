@@ -48,7 +48,11 @@ class AirtableResource(ConfigurableResource):
         description="Airtable table ID (starts with 'tbl')",
     )
     api_key: str = Field(
-        description="Airtable Personal Access Token",
+        description="Airtable Personal Access Token (read; used for write too unless write_api_key is set)",
+    )
+    write_api_key: str | None = Field(
+        default=None,
+        description="Optional token with data.records:write scope for PATCH. If unset, api_key is used.",
     )
 
     # Column name mapping from Airtable to our model fields
@@ -73,13 +77,24 @@ class AirtableResource(ConfigurableResource):
         """Base URL for Airtable API."""
         return f"https://api.airtable.com/v0/{self.base_id}/{self.table_id}"
 
-    @property
-    def _headers(self) -> dict[str, str]:
-        """Request headers with authentication."""
+    def _auth_headers(self, token: str | None = None) -> dict[str, str]:
+        """Build request headers; token defaults to api_key for read, or use _write_headers for PATCH."""
+        raw = token if token is not None else self.api_key
+        resolved = raw.get_secret_value() if hasattr(raw, "get_secret_value") else raw
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {resolved}",
             "Content-Type": "application/json",
         }
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        """Request headers with authentication (read)."""
+        return self._auth_headers()
+
+    def _write_headers(self) -> dict[str, str]:
+        """Request headers for write (PATCH); use write_api_key if set."""
+        raw = self.write_api_key or self.api_key
+        return self._auth_headers(raw)
 
     def fetch_all_records(self) -> list[dict[str, Any]]:
         """Fetch all records from the Airtable table.
@@ -265,6 +280,38 @@ class AirtableResource(ConfigurableResource):
 
         return record_ids
 
+    def update_record(self, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Update an Airtable candidate record with the given fields (PATCH).
+
+        Args:
+            record_id: Airtable record ID (e.g. recXXX).
+            fields: Dict of Airtable column names to values.
+
+        Returns:
+            The updated Airtable record as returned by the API.
+
+        Raises:
+            httpx.HTTPStatusError: On API errors. 403 with a hint to use a token
+                with data.records:write scope (or set AIRTABLE_WRITE_TOKEN).
+        """
+        with httpx.Client(timeout=30.0) as client:
+            response = client.patch(
+                f"{self._base_url}/{record_id}",
+                headers=self._write_headers(),
+                json={"fields": fields},
+            )
+            if response.status_code == 403:
+                raise httpx.HTTPStatusError(
+                    "403 Forbidden: Airtable token does not have write access. "
+                    "Create a token at https://airtable.com/create/tokens with scope "
+                    "'data.records:write' (and access to this base), then set AIRTABLE_API_KEY "
+                    "or AIRTABLE_WRITE_TOKEN in .env and restart Dagster.",
+                    request=response.request,
+                    response=response,
+                )
+            response.raise_for_status()
+            return response.json()
+
 
 class AirtableJobsResource(ConfigurableResource):
     """Airtable API resource for fetching job records (e.g. Customers STT table).
@@ -276,6 +323,10 @@ class AirtableJobsResource(ConfigurableResource):
     base_id: str = Field(description="Airtable base ID (starts with 'app')")
     table_id: str = Field(description="Airtable jobs table ID (starts with 'tbl')")
     api_key: str = Field(description="Airtable Personal Access Token")
+    write_api_key: str | None = Field(
+        default=None,
+        description="Optional token with data.records:write scope for PATCH.",
+    )
 
     @property
     def _base_url(self) -> str:
@@ -285,6 +336,14 @@ class AirtableJobsResource(ConfigurableResource):
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _write_headers(self) -> dict[str, str]:
+        raw = self.write_api_key or self.api_key
+        token = raw.get_secret_value() if hasattr(raw, "get_secret_value") else raw
+        return {
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
@@ -353,8 +412,16 @@ class AirtableJobsResource(ConfigurableResource):
         with httpx.Client(timeout=30.0) as client:
             response = client.patch(
                 f"{self._base_url}/{record_id}",
-                headers=self._headers,
+                headers=self._write_headers(),
                 json={"fields": fields},
             )
+            if response.status_code == 403:
+                raise httpx.HTTPStatusError(
+                    "403 Forbidden: Airtable token does not have write access. "
+                    "Create a token at https://airtable.com/create/tokens with scope "
+                    "'data.records:write', then set AIRTABLE_API_KEY or AIRTABLE_WRITE_TOKEN.",
+                    request=response.request,
+                    response=response,
+                )
             response.raise_for_status()
             return response.json()

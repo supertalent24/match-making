@@ -58,3 +58,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Airtable backups (local copies of table data/schema)
+scripts/airtable_backups/

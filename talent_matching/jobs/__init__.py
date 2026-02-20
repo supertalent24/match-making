@@ -5,6 +5,7 @@ Jobs available in the Dagster dashboard:
 ASSET JOBS (for materializing assets):
 - candidate_pipeline: Process candidates through full pipeline (partitioned)
 - candidate_ingest: Fetch and store raw candidates only (no LLM)
+- upload_normalized_to_airtable_job: Upload normalized candidate data to Airtable (N) columns only (partitioned)
 
 OPS JOBS (for operational tasks):
 - sync_airtable_candidates_job: Register Airtable candidate records as dynamic partitions
@@ -28,6 +29,7 @@ from dagster import (
 )
 
 from talent_matching.assets.candidates import (
+    airtable_candidate_sync,
     airtable_candidates,
     candidate_partitions,
     candidate_role_fitness,
@@ -62,7 +64,8 @@ candidate_pipeline_job = define_asset_job(
     name="candidate_pipeline",
     description=(
         "Process candidates through the full pipeline: "
-        "fetch → store → normalize (LLM) → vectorize → role fitness. "
+        "fetch → store → normalize (LLM) → vectorize → role fitness → optional Airtable write-back. "
+        "Airtable sync is off by default; enable via run config (ops.airtable_candidate_sync.config.sync_to_airtable: true). "
         "Use Backfill to select partitions."
     ),
     selection=[
@@ -71,6 +74,7 @@ candidate_pipeline_job = define_asset_job(
         normalized_candidates,
         candidate_vectors,
         candidate_role_fitness,
+        airtable_candidate_sync,
     ],
     partitions_def=candidate_partitions,
     # Retry on failures (rate limits, transient API errors)
@@ -88,6 +92,24 @@ candidate_ingest_job = define_asset_job(
         raw_candidates,
     ],
     partitions_def=candidate_partitions,
+)
+
+upload_normalized_to_airtable_job = define_asset_job(
+    name="upload_normalized_to_airtable",
+    description=(
+        "Upload normalized candidate data to Airtable (N)-prefixed columns only. "
+        "Uses already-materialized normalized_candidates; does not re-run normalization. "
+        "Sync to Airtable is on by default for this job. Use Backfill to select which candidate partitions to sync."
+    ),
+    selection=[airtable_candidate_sync],
+    partitions_def=candidate_partitions,
+    config={
+        "ops": {
+            "airtable_candidate_sync": {
+                "config": {"sync_to_airtable": True},
+            },
+        },
+    },
 )
 
 # Job pipeline (partitioned per Airtable job record).
@@ -138,7 +160,7 @@ matchmaking_job = define_asset_job(
 # =============================================================================
 
 
-@op(required_resource_keys={"airtable"})
+@op(required_resource_keys={"airtable"}, tags={"dagster/concurrency_key": "airtable_api"})
 def sync_airtable_candidates_partitions(context: OpExecutionContext) -> dict:
     """Sync all Airtable candidate record IDs as dynamic partitions.
 
@@ -179,7 +201,7 @@ def sync_airtable_candidates_partitions(context: OpExecutionContext) -> dict:
     }
 
 
-@op(required_resource_keys={"airtable"})
+@op(required_resource_keys={"airtable"}, tags={"dagster/concurrency_key": "airtable_api"})
 def fetch_sample_candidates(context: OpExecutionContext, sample_size: int = 20) -> list:
     """Fetch a sample of candidates from Airtable for testing."""
     airtable = context.resources.airtable
@@ -242,7 +264,7 @@ def sync_airtable_candidates_job():
     sync_airtable_candidates_partitions()
 
 
-@op(required_resource_keys={"airtable_jobs"})
+@op(required_resource_keys={"airtable_jobs"}, tags={"dagster/concurrency_key": "airtable_api"})
 def sync_airtable_jobs_partitions(context: OpExecutionContext) -> dict:
     """Sync all Airtable job record IDs as dynamic partitions (jobs table)."""
     airtable_jobs_resource = context.resources.airtable_jobs
@@ -291,6 +313,7 @@ def sample_candidates_job():
 __all__ = [
     "candidate_pipeline_job",
     "candidate_ingest_job",
+    "upload_normalized_to_airtable_job",
     "job_pipeline_job",
     "job_ingest_job",
     "matchmaking_job",

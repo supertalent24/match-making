@@ -40,6 +40,7 @@ job_partitions = DynamicPartitionsDefinition(name="jobs")
     description="Single job record fetched from Airtable (jobs table)",
     group_name="jobs",
     required_resource_keys={"airtable_jobs"},
+    op_tags={"dagster/concurrency_key": "airtable_api"},
     metadata={"source": "airtable"},
 )
 def airtable_jobs(context: AssetExecutionContext) -> Output[dict[str, Any]]:
@@ -271,6 +272,7 @@ class AirtableJobSyncConfig(Config):
     description="Optional: write back parsed job fields to the Airtable row (controlled by run config)",
     group_name="jobs",
     required_resource_keys={"airtable_jobs"},
+    op_tags={"dagster/concurrency_key": "airtable_api"},
     metadata={"optional_sync": True},
 )
 def airtable_job_sync(

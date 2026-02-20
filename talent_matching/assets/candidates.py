@@ -18,6 +18,7 @@ from typing import Any
 from dagster import (
     AssetExecutionContext,
     AssetIn,
+    Config,
     DataVersion,
     DynamicPartitionsDefinition,
     Output,
@@ -25,6 +26,7 @@ from dagster import (
 )
 
 from talent_matching.llm import PDFEngine, embed_text, extract_pdf_from_url, normalize_cv
+from talent_matching.utils.airtable_mapper import normalized_candidate_to_airtable_fields
 
 # Dynamic partition definition for candidates
 # Each candidate record gets its own partition key (Airtable record ID)
@@ -36,6 +38,7 @@ candidate_partitions = DynamicPartitionsDefinition(name="candidates")
     description="Single candidate record fetched from Airtable",
     group_name="candidates",
     required_resource_keys={"airtable"},
+    op_tags={"dagster/concurrency_key": "airtable_api"},
     metadata={
         "source": "airtable",
     },
@@ -621,3 +624,49 @@ def candidate_role_fitness(
         )
     context.log.info(f"Computed {len(results)} role fitness scores for {record_id}")
     return results
+
+
+class AirtableCandidateSyncConfig(Config):
+    """Run config for airtable_candidate_sync. Set sync_to_airtable=True to write back to Airtable."""
+
+    sync_to_airtable: bool = False
+
+
+@asset(
+    partitions_def=candidate_partitions,
+    ins={"normalized_candidates": AssetIn()},
+    description="Optional: write normalized candidate fields back to Airtable (N)-prefixed columns (controlled by run config)",
+    group_name="candidates",
+    required_resource_keys={"airtable", "matchmaking"},
+    op_tags={"dagster/concurrency_key": "airtable_api"},
+    metadata={"optional_sync": True},
+)
+def airtable_candidate_sync(
+    context: AssetExecutionContext,
+    config: AirtableCandidateSyncConfig,
+    normalized_candidates: dict[str, Any],
+) -> dict[str, Any]:
+    """Write all normalized candidate fields back to the same Airtable row under (N)-prefixed columns.
+
+    Only performs the write when run config sync_to_airtable is True (default False).
+    Loads full NormalizedCandidate from Postgres by airtable_record_id and PATCHes the record.
+    """
+    record_id = context.partition_key
+    if not config.sync_to_airtable:
+        context.log.info(f"Sync to Airtable disabled for {record_id} (sync_to_airtable=False)")
+        return {"airtable_record_id": record_id, "synced": False, "skipped": True, "fields": {}}
+    matchmaking = context.resources.matchmaking
+    candidate = matchmaking.get_normalized_candidate_by_airtable_record_id(record_id)
+    if not candidate:
+        context.log.warning(
+            f"No normalized_candidates row for airtable_record_id={record_id}; skip sync"
+        )
+        return {"airtable_record_id": record_id, "synced": False, "skipped": True, "fields": {}}
+    fields = normalized_candidate_to_airtable_fields(candidate)
+    if not fields:
+        context.log.info(f"No fields to sync for {record_id}")
+        return {"airtable_record_id": record_id, "synced": False, "fields": {}}
+    airtable = context.resources.airtable
+    airtable.update_record(record_id, fields)
+    context.log.info(f"Synced {record_id}: {len(fields)} (N) columns")
+    return {"airtable_record_id": record_id, "synced": True, "fields": fields}

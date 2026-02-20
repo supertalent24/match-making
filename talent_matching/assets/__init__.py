@@ -1,6 +1,7 @@
 """Dagster assets for the talent matching pipeline."""
 
 from talent_matching.assets.candidates import (
+    airtable_candidate_sync,
     candidate_role_fitness,
     candidate_vectors,
     normalized_candidates,
@@ -25,6 +26,7 @@ __all__ = [
     "normalized_candidates",
     "candidate_vectors",
     "candidate_role_fitness",
+    "airtable_candidate_sync",
     # Job assets
     "raw_jobs",
     "normalized_jobs",

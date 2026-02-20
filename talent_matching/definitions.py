@@ -29,6 +29,7 @@ from talent_matching.jobs import (
     sample_candidates_job,
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
+    upload_normalized_to_airtable_job,
 )
 from talent_matching.resources import (
     AirtableJobsResource,
@@ -57,17 +58,19 @@ def get_environment() -> str:
 # Development resources (mock implementations)
 # Using Dagster EnvVar for deferred resolution and better config visibility
 dev_resources = {
-    # Airtable resource for fetching candidates
+    # Airtable resource for fetching candidates (optional AIRTABLE_WRITE_TOKEN for PATCH)
     "airtable": AirtableResource(
         base_id=EnvVar("AIRTABLE_BASE_ID"),
         table_id=EnvVar("AIRTABLE_TABLE_ID"),
         api_key=EnvVar("AIRTABLE_API_KEY"),
+        write_api_key=os.getenv("AIRTABLE_WRITE_TOKEN") or None,
     ),
     # Airtable jobs table (e.g. Customers STT with Job Description Link)
     "airtable_jobs": AirtableJobsResource(
         base_id=EnvVar("AIRTABLE_BASE_ID"),
         table_id=EnvVar("AIRTABLE_JOBS_TABLE_ID"),
         api_key=EnvVar("AIRTABLE_API_KEY"),
+        write_api_key=os.getenv("AIRTABLE_WRITE_TOKEN") or None,
     ),
     # Notion API for fetching job description page content (optional key; tries without if unset)
     "notion": NotionResource(api_key=os.getenv("NOTION_API_KEY", "")),
@@ -134,6 +137,7 @@ all_jobs = [
     # Asset jobs (partitioned) - use Backfill in UI to select partitions
     candidate_pipeline_job,
     candidate_ingest_job,
+    upload_normalized_to_airtable_job,
     job_pipeline_job,
     job_ingest_job,
     matchmaking_job,

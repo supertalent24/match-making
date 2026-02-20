@@ -8,10 +8,11 @@ from pydantic import Field
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from talent_matching.models.candidates import CandidateSkill
+from talent_matching.models.candidates import CandidateSkill, NormalizedCandidate
 from talent_matching.models.enums import RequirementTypeEnum
 from talent_matching.models.jobs import JobRequiredSkill
 from talent_matching.models.skills import Skill
+from talent_matching.utils.airtable_mapper import NORMALIZED_CANDIDATE_SYNCABLE_FIELDS
 
 
 class MatchmakingResource(ConfigurableResource):
@@ -125,3 +126,24 @@ class MatchmakingResource(ConfigurableResource):
                 }
             )
         return result
+
+    def get_normalized_candidate_by_airtable_record_id(
+        self, airtable_record_id: str
+    ) -> dict[str, Any] | None:
+        """Load a single NormalizedCandidate row by airtable_record_id as a dict of syncable fields.
+
+        Returns None if no row exists. Keys are attribute names (e.g. full_name, professional_summary).
+        Used by airtable_candidate_sync to build the Airtable PATCH payload.
+        """
+        session = self._get_session()
+        row = session.execute(
+            select(NormalizedCandidate).where(
+                NormalizedCandidate.airtable_record_id == airtable_record_id
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            session.close()
+            return None
+        candidate = {name: getattr(row, name) for name in NORMALIZED_CANDIDATE_SYNCABLE_FIELDS}
+        session.close()
+        return candidate

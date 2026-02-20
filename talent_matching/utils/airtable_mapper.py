@@ -6,7 +6,111 @@ be used independently for testing and data transformation.
 """
 
 import re
+from datetime import datetime
 from typing import Any
+
+# Prefix for normalized candidate columns when writing back to Airtable
+NORMALIZED_COLUMN_PREFIX = "(N) "
+
+# Syncable NormalizedCandidate fields (exclude id, airtable_record_id, raw_candidate_id, verified_by, normalized_json)
+NORMALIZED_CANDIDATE_SYNCABLE_FIELDS = [
+    "full_name",
+    "email",
+    "phone",
+    "location_city",
+    "location_country",
+    "location_region",
+    "timezone",
+    "professional_summary",
+    "current_role",
+    "seniority_level",
+    "years_of_experience",
+    "desired_job_categories",
+    "skills_summary",
+    "companies_summary",
+    "notable_achievements",
+    "verified_communities",
+    "compensation_min",
+    "compensation_max",
+    "compensation_currency",
+    "job_count",
+    "job_switches_count",
+    "average_tenure_months",
+    "longest_tenure_months",
+    "education_highest_degree",
+    "education_field",
+    "education_institution",
+    "hackathon_wins_count",
+    "hackathon_total_prize_usd",
+    "solana_hackathon_wins",
+    "x_handle",
+    "linkedin_handle",
+    "github_handle",
+    "social_followers_total",
+    "verification_status",
+    "verification_notes",
+    "verified_at",
+    "prompt_version",
+    "model_version",
+    "confidence_score",
+    "normalized_at",
+]
+
+
+def _snake_to_title(name: str) -> str:
+    """Convert snake_case to Title Case (e.g. full_name -> Full Name)."""
+    return name.replace("_", " ").title()
+
+
+def _normalized_column_name(snake_name: str) -> str:
+    """Return Airtable column name for a normalized field: (N) Title Case."""
+    return NORMALIZED_COLUMN_PREFIX + _snake_to_title(snake_name)
+
+
+# Mapping: NormalizedCandidate attribute name -> Airtable column name (N) prefix
+AIRTABLE_CANDIDATES_WRITEBACK_FIELDS: dict[str, str] = {
+    name: _normalized_column_name(name) for name in NORMALIZED_CANDIDATE_SYNCABLE_FIELDS
+}
+
+
+def _value_for_airtable(value: Any) -> Any:
+    """Coerce a NormalizedCandidate field value for Airtable API (strings, numbers, list, enum, datetime).
+
+    Lists are sent as newline-separated strings so they can be stored in Long text columns.
+    Airtable multiple-select columns require existing options and token permission to create
+    new ones; using Long text avoids that and supports arbitrary values.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "value"):  # Enum
+        return value.value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, list):
+        if not value:
+            return None
+        # Store as single string for Long text columns (avoids multiple-select option limits)
+        return "\n".join(str(v) for v in value)
+    return value
+
+
+def normalized_candidate_to_airtable_fields(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Build Airtable PATCH fields dict from a NormalizedCandidate row (dict).
+
+    Uses AIRTABLE_CANDIDATES_WRITEBACK_FIELDS. Skips None values. Coerces enums to .value,
+    datetimes to ISO 8601 strings, arrays to list of strings.
+    """
+    fields: dict[str, Any] = {}
+    for our_key, airtable_col in AIRTABLE_CANDIDATES_WRITEBACK_FIELDS.items():
+        raw = candidate.get(our_key)
+        if raw is None:
+            continue
+        coerced = _value_for_airtable(raw)
+        if coerced is None:
+            continue
+        fields[airtable_col] = coerced
+    return fields
+
 
 # Column name mapping from Airtable to RawCandidate model fields
 AIRTABLE_COLUMN_MAPPING: dict[str, str] = {

@@ -7,14 +7,17 @@ This module tests:
 - Data versioning
 """
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from talent_matching.resources.airtable import AirtableResource
 from talent_matching.utils.airtable_mapper import (
+    AIRTABLE_CANDIDATES_WRITEBACK_FIELDS,
     extract_cv_url,
     map_airtable_row_to_raw_candidate,
+    normalized_candidate_to_airtable_fields,
     parse_comma_separated,
 )
 
@@ -111,9 +114,9 @@ class TestMapAirtableRowToRawCandidate:
                 "Skills": "Python,Rust,Solana",
             },
         }
-        
+
         result = map_airtable_row_to_raw_candidate(record)
-        
+
         assert result["airtable_record_id"] == "recXYZ123"
         assert result["full_name"] == "John Doe"
         assert result["location_raw"] == "San Francisco, CA"
@@ -130,9 +133,9 @@ class TestMapAirtableRowToRawCandidate:
                 "CV": [{"url": "https://example.com/cv.pdf"}],
             },
         }
-        
+
         result = map_airtable_row_to_raw_candidate(record)
-        
+
         assert result["cv_url"] == "https://example.com/cv.pdf"
 
     def test_handles_missing_fields(self):
@@ -143,9 +146,9 @@ class TestMapAirtableRowToRawCandidate:
                 "Full Name": "Minimal Candidate",
             },
         }
-        
+
         result = map_airtable_row_to_raw_candidate(record)
-        
+
         assert result["full_name"] == "Minimal Candidate"
         assert result["location_raw"] is None
         assert result["skills_raw"] is None
@@ -164,9 +167,9 @@ class TestMapAirtableRowToRawCandidate:
                 "Earn Profile": "https://earn.superteam.fun/profile",
             },
         }
-        
+
         result = map_airtable_row_to_raw_candidate(record)
-        
+
         assert result["x_profile_url"] == "https://x.com/profile"
         assert result["linkedin_url"] == "https://linkedin.com/in/profile"
         assert result["github_url"] == "https://github.com/profile"
@@ -211,10 +214,10 @@ class TestAirtableResource:
                 "Skills": "Python,Rust",  # Changed
             },
         }
-        
+
         mapped1 = resource._map_record(record1)
         mapped2 = resource._map_record(record2)
-        
+
         assert mapped1["_data_version"] != mapped2["_data_version"]
 
     def test_record_hash_same_for_same_content(self, resource):
@@ -226,10 +229,10 @@ class TestAirtableResource:
                 "Skills": "Python",
             },
         }
-        
+
         mapped1 = resource._map_record(record)
         mapped2 = resource._map_record(record)
-        
+
         assert mapped1["_data_version"] == mapped2["_data_version"]
 
     @patch("talent_matching.resources.airtable.httpx.Client")
@@ -238,7 +241,7 @@ class TestAirtableResource:
         mock_client = MagicMock()
         mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
         mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
-        
+
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "id": "recTEST",
@@ -249,9 +252,9 @@ class TestAirtableResource:
             },
         }
         mock_client.get.return_value = mock_response
-        
+
         result = resource.fetch_record_by_id("recTEST")
-        
+
         assert result["airtable_record_id"] == "recTEST"
         assert result["full_name"] == "Test User"
         assert result["skills_raw"] == "Python,Rust"
@@ -263,7 +266,7 @@ class TestAirtableResource:
         mock_client = MagicMock()
         mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
         mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
-        
+
         # First page with offset
         page1_response = MagicMock()
         page1_response.json.return_value = {
@@ -272,7 +275,7 @@ class TestAirtableResource:
             ],
             "offset": "page2_cursor",
         }
-        
+
         # Second page without offset (last page)
         page2_response = MagicMock()
         page2_response.json.return_value = {
@@ -280,11 +283,11 @@ class TestAirtableResource:
                 {"id": "rec2", "fields": {"Full Name": "User 2"}},
             ],
         }
-        
+
         mock_client.get.side_effect = [page1_response, page2_response]
-        
+
         result = resource.fetch_all_records()
-        
+
         assert len(result) == 2
         assert result[0]["airtable_record_id"] == "rec1"
         assert result[1]["airtable_record_id"] == "rec2"
@@ -296,7 +299,7 @@ class TestAirtableResource:
         mock_client = MagicMock()
         mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
         mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
-        
+
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "records": [
@@ -306,7 +309,74 @@ class TestAirtableResource:
             ],
         }
         mock_client.get.return_value = mock_response
-        
+
         result = resource.get_all_record_ids()
-        
+
         assert result == ["rec1", "rec2", "rec3"]
+
+    @patch("talent_matching.resources.airtable.httpx.Client")
+    def test_update_record(self, mock_client_class, resource):
+        """Test PATCH update_record."""
+        mock_client = MagicMock()
+        mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"id": "rec1", "fields": {"(N) Full Name": "Jane"}}
+        mock_client.patch.return_value = mock_response
+
+        result = resource.update_record("rec1", {"(N) Full Name": "Jane"})
+
+        assert result["id"] == "rec1"
+        assert result["fields"]["(N) Full Name"] == "Jane"
+        mock_client.patch.assert_called_once()
+        call_kwargs = mock_client.patch.call_args[1]
+        assert call_kwargs["json"] == {"fields": {"(N) Full Name": "Jane"}}
+
+
+class TestNormalizedCandidateWriteback:
+    """Tests for (N)-prefixed normalized candidate → Airtable field mapping."""
+
+    def test_airtable_candidates_writeback_fields_has_n_prefix(self):
+        """All writeback column names use (N) prefix."""
+        for airtable_col in AIRTABLE_CANDIDATES_WRITEBACK_FIELDS.values():
+            assert airtable_col.startswith("(N) "), f"Expected (N) prefix: {airtable_col}"
+
+    def test_airtable_candidates_writeback_fields_contains_expected_keys(self):
+        """Mapping includes expected syncable fields."""
+        assert "full_name" in AIRTABLE_CANDIDATES_WRITEBACK_FIELDS
+        assert AIRTABLE_CANDIDATES_WRITEBACK_FIELDS["full_name"] == "(N) Full Name"
+        assert "professional_summary" in AIRTABLE_CANDIDATES_WRITEBACK_FIELDS
+        assert "years_of_experience" in AIRTABLE_CANDIDATES_WRITEBACK_FIELDS
+        assert "verification_status" in AIRTABLE_CANDIDATES_WRITEBACK_FIELDS
+
+    def test_normalized_candidate_to_airtable_fields_skips_none(self):
+        """None values are omitted from the payload."""
+        candidate = {"full_name": "Jane", "email": None, "phone": None}
+        out = normalized_candidate_to_airtable_fields(candidate)
+        assert out == {"(N) Full Name": "Jane"}
+        assert "(N) Email" not in out
+
+    def test_normalized_candidate_to_airtable_fields_coerces_list(self):
+        """Array fields become list of strings for Airtable multi-select."""
+        candidate = {"skills_summary": ["Python", "Rust"]}
+        out = normalized_candidate_to_airtable_fields(candidate)
+        assert out["(N) Skills Summary"] == ["Python", "Rust"]
+
+    def test_normalized_candidate_to_airtable_fields_coerces_enum(self):
+        """Enum values are serialized with .value."""
+
+        class StubEnum:
+            value = "verified"
+
+        candidate = {"verification_status": StubEnum()}
+        out = normalized_candidate_to_airtable_fields(candidate)
+        assert out["(N) Verification Status"] == "verified"
+
+    def test_normalized_candidate_to_airtable_fields_coerces_datetime(self):
+        """Datetime values become ISO 8601 strings."""
+        dt = datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC)
+        candidate = {"normalized_at": dt}
+        out = normalized_candidate_to_airtable_fields(candidate)
+        assert "(N) Normalized At" in out
+        assert "2025-01-15" in out["(N) Normalized At"]
