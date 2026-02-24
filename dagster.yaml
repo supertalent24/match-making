@@ -81,6 +81,11 @@ run_launcher:
 concurrency:
   runs:
     max_concurrent_runs: 20
+    # Only one matchmaking partition at a time (job or sensor) to avoid overloading the machine
+    tag_concurrency_limits:
+      - key: "dagster/concurrency_limit"
+        value: "matchmaking"
+        limit: 1
   pools:
     default_limit: 50
 
