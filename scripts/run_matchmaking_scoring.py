@@ -133,7 +133,33 @@ def _skill_coverage_score(req_skills: list, cand_skills_map: dict) -> float:
     return min(1.0, scored / total_weight) if total_weight else 1.0
 
 
-def _skill_semantic_score(job_role_vec: list | None, cand_skill_vecs: dict) -> float:
+def _skill_key_from_name(skill_name: str) -> str:
+    return f"skill_{skill_name.lower().replace(' ', '_').replace('.', '')}"[:150]
+
+
+def _skill_semantic_score(
+    job_role_vec: list | None,
+    cand_skill_vecs: dict,
+    req_skills: list | None = None,
+    job_skill_vecs: dict | None = None,
+) -> float:
+    """Per-skill job expected_capability vs candidate skill_* when both exist; else role vs max cand skill."""
+    if req_skills and job_skill_vecs:
+        total_weight = 0.0
+        weighted_sim = 0.0
+        for s in req_skills:
+            name = (s.get("skill_name") or "").strip()
+            if not name:
+                continue
+            key = _skill_key_from_name(name)
+            job_vec = job_skill_vecs.get(key)
+            cand_vec = cand_skill_vecs.get(key)
+            if job_vec and cand_vec:
+                w = 3.0 if (s.get("requirement_type") or "must_have") == "must_have" else 1.0
+                total_weight += w
+                weighted_sim += _cosine_similarity(job_vec, cand_vec) * w
+        if total_weight > 0:
+            return weighted_sim / total_weight
     if not job_role_vec:
         return 0.5
     skill_keys = [k for k in cand_skill_vecs if k.startswith("skill_")]
@@ -351,7 +377,9 @@ def run_scoring(
             matching = [s for s in must_have + nice_to_have if s in candidate_skill_names]
 
             skill_coverage = _skill_coverage_score(req_skills, cand_skills_map_for_cand)
-            skill_semantic = _skill_semantic_score(job_role_vec, cvecs)
+            skill_semantic = _skill_semantic_score(
+                job_role_vec, cvecs, req_skills=req_skills, job_skill_vecs=jvecs
+            )
             if matching:
                 skill_fit_score = (
                     SKILL_RATING_WEIGHT * skill_coverage + SKILL_SEMANTIC_WEIGHT * skill_semantic
@@ -526,13 +554,7 @@ def main():
     if not candidate_vectors:
         print("\n  No candidate vectors. Materialize candidate_vectors for your candidates first.")
 
-    matchmaking = MatchmakingResource(
-        host=os.environ["POSTGRES_HOST"],
-        port=int(os.environ.get("POSTGRES_PORT", 5432)),
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-        database=os.environ["POSTGRES_DB"],
-    )
+    matchmaking = MatchmakingResource()
     job_ids = [str(j["id"]) for j in normalized_jobs]
     cand_ids = [str(c["id"]) for c in normalized_candidates]
     job_required_skills = matchmaking.get_job_required_skills(job_ids)

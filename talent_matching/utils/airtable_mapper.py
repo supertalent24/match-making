@@ -76,9 +76,8 @@ AIRTABLE_CANDIDATES_WRITEBACK_FIELDS: dict[str, str] = {
 def _value_for_airtable(value: Any) -> Any:
     """Coerce a NormalizedCandidate field value for Airtable API (strings, numbers, list, enum, datetime).
 
-    Lists are sent as newline-separated strings so they can be stored in Long text columns.
-    Airtable multiple-select columns require existing options and token permission to create
-    new ones; using Long text avoids that and supports arbitrary values.
+    Lists are sent as comma-separated strings so they can be stored in Long text columns and
+    deserialized reliably (items may contain newlines or other whitespace).
     """
     if value is None:
         return None
@@ -89,8 +88,8 @@ def _value_for_airtable(value: Any) -> Any:
     if isinstance(value, list):
         if not value:
             return None
-        # Store as single string for Long text columns (avoids multiple-select option limits)
-        return "\n".join(str(v) for v in value)
+        # Comma-separated for Long text columns; easy to split back (strip each item)
+        return ", ".join(str(v).strip() for v in value)
     return value
 
 
@@ -270,6 +269,133 @@ def map_airtable_row_to_raw_job(
         else:
             mapped[model_field] = str(value) if value else None
     return mapped
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NORMALIZED JOB AIRTABLE SYNC
+# ═══════════════════════════════════════════════════════════════════════════
+
+NORMALIZED_JOB_SYNCABLE_FIELDS = [
+    "job_title",
+    "job_category",
+    "role_type",
+    "company_name",
+    "company_stage",
+    "company_size",
+    "role_summary",
+    "responsibilities",
+    "nice_to_haves",
+    "benefits",
+    "team_context",
+    "seniority_level",
+    "education_required",
+    "domain_experience",
+    "tech_stack",
+    "location_type",
+    "locations",
+    "timezone_requirements",
+    "employment_type",
+    "min_years_experience",
+    "max_years_experience",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "has_equity",
+    "has_token_compensation",
+    "narrative_experience",
+    "narrative_domain",
+    "narrative_personality",
+    "narrative_impact",
+    "narrative_technical",
+    "narrative_role",
+    "must_have_skills",
+    "nice_to_have_skills",
+    "prompt_version",
+    "model_version",
+    "confidence_score",
+    "normalized_at",
+]
+
+AIRTABLE_JOBS_WRITEBACK_FIELDS: dict[str, str] = {
+    name: _normalized_column_name(name) for name in NORMALIZED_JOB_SYNCABLE_FIELDS
+}
+
+# Reverse lookup: Airtable (N) column name -> snake_case DB field name
+_AIRTABLE_JOBS_REVERSE_FIELDS: dict[str, str] = {
+    v: k for k, v in AIRTABLE_JOBS_WRITEBACK_FIELDS.items()
+}
+
+# Fields that should be parsed as integers when reading back from Airtable
+_JOB_INT_FIELDS = {"min_years_experience", "max_years_experience", "salary_min", "salary_max"}
+# Fields that should be parsed as booleans
+_JOB_BOOL_FIELDS = {"has_equity", "has_token_compensation"}
+# Fields that should be parsed as floats
+_JOB_FLOAT_FIELDS = {"confidence_score"}
+# Fields that are comma-separated lists in Airtable
+_JOB_LIST_FIELDS = {
+    "responsibilities",
+    "nice_to_haves",
+    "benefits",
+    "domain_experience",
+    "tech_stack",
+    "locations",
+    "employment_type",
+    "must_have_skills",
+    "nice_to_have_skills",
+}
+
+
+def normalized_job_to_airtable_fields(job: dict[str, Any]) -> dict[str, Any]:
+    """Build Airtable PATCH fields dict from a NormalizedJob row (dict).
+
+    Uses AIRTABLE_JOBS_WRITEBACK_FIELDS. Skips None values. Coerces enums, datetimes,
+    lists (comma-separated), and booleans for Airtable API.
+    """
+    fields: dict[str, Any] = {}
+    for our_key, airtable_col in AIRTABLE_JOBS_WRITEBACK_FIELDS.items():
+        raw = job.get(our_key)
+        if raw is None:
+            continue
+        coerced = _value_for_airtable(raw)
+        if coerced is None:
+            continue
+        fields[airtable_col] = coerced
+    return fields
+
+
+def airtable_normalized_job_fields_to_db(airtable_fields: dict[str, Any]) -> dict[str, Any]:
+    """Convert Airtable (N)-prefixed fields back to normalized_jobs DB column names and types.
+
+    Parses comma-separated lists, booleans, numbers, and dates from Airtable string
+    representations back to Python types suitable for DB storage.
+    """
+    result: dict[str, Any] = {}
+    for airtable_col, value in airtable_fields.items():
+        if not airtable_col.startswith(NORMALIZED_COLUMN_PREFIX):
+            continue
+        db_field = _AIRTABLE_JOBS_REVERSE_FIELDS.get(airtable_col)
+        if db_field is None:
+            continue
+        if value is None or value == "":
+            result[db_field] = None
+            continue
+
+        if db_field in _JOB_INT_FIELDS:
+            result[db_field] = int(value) if value else None
+        elif db_field in _JOB_BOOL_FIELDS:
+            result[db_field] = bool(value) if not isinstance(value, bool) else value
+        elif db_field in _JOB_FLOAT_FIELDS:
+            result[db_field] = float(value) if value else None
+        elif db_field in _JOB_LIST_FIELDS:
+            result[db_field] = parse_comma_separated(str(value)) if value else []
+        elif db_field == "normalized_at":
+            if isinstance(value, str):
+                result[db_field] = datetime.fromisoformat(value)
+            else:
+                result[db_field] = value
+        else:
+            result[db_field] = str(value) if not isinstance(value, str) else value
+    return result
 
 
 def map_airtable_row_to_raw_candidate(

@@ -51,13 +51,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    matchmaking = MatchmakingResource(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-        user=os.getenv("POSTGRES_USER", ""),
-        password=os.getenv("POSTGRES_PASSWORD", ""),
-        database=os.getenv("POSTGRES_DB", ""),
-    )
+    matchmaking = MatchmakingResource()
     candidate = matchmaking.get_normalized_candidate_by_airtable_record_id(record_id)
     if not candidate:
         print(f"No normalized candidate in DB for airtable_record_id={record_id!r}")
