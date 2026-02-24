@@ -92,6 +92,19 @@ candidate_pipeline_job = define_asset_job(
     op_retry_policy=openrouter_retry_policy,
 )
 
+candidate_vectors_job = define_asset_job(
+    name="candidate_vectors_backfill",
+    description=(
+        "Re-vectorize candidate profiles only (no LLM normalization). "
+        "Uses already-materialized normalized_candidates as input. "
+        "Use this instead of asset backfills to avoid the first-tick submission storm "
+        "that blocks completion tracking in the asset backfill daemon."
+    ),
+    selection=[candidate_vectors],
+    partitions_def=candidate_partitions,
+    op_retry_policy=openrouter_retry_policy,
+)
+
 candidate_ingest_job = define_asset_job(
     name="candidate_ingest",
     description=(

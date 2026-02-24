@@ -23,11 +23,14 @@ from talent_matching.io_managers import PgVectorIOManager, PostgresMetricsIOMana
 from talent_matching.jobs import (
     candidate_ingest_job,
     candidate_pipeline_job,
+    candidate_vectors_job,
     job_ingest_job,
     job_pipeline_job,
     matchmaking_job,
     matchmaking_with_feedback_job,
     sample_candidates_job,
+    skill_normalization_job,
+    skill_normalization_schedule,
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
     upload_normalized_jobs_to_airtable_job,
@@ -124,6 +127,7 @@ def get_resources():
 all_jobs = [
     # Asset jobs (partitioned) - use Backfill in UI to select partitions
     candidate_pipeline_job,
+    candidate_vectors_job,
     candidate_ingest_job,
     upload_normalized_to_airtable_job,
     job_pipeline_job,
@@ -135,6 +139,12 @@ all_jobs = [
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
     sample_candidates_job,
+    skill_normalization_job,
+]
+
+# Schedules
+all_schedules = [
+    skill_normalization_schedule,
 ]
 
 # All sensors
@@ -149,6 +159,7 @@ defs = Definitions(
     assets=all_assets,
     resources=get_resources(),
     jobs=all_jobs,
+    schedules=all_schedules,
     sensors=all_sensors,
 )
 
