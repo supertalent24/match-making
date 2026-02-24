@@ -11,13 +11,17 @@ Two operations used by the periodic skill_normalization job:
 """
 
 import json
+import logging
 from itertools import groupby
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from talent_matching.resources.openrouter import OpenRouterResource
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MODEL = "openai/gpt-4o-mini"
+MAX_OUTPUT_TOKENS = 16_384
 
 MAX_BATCH_SIZE = 400
 
@@ -45,23 +49,90 @@ def _chunk_by_letter(names: list[str]) -> list[list[str]]:
     return batches
 
 
-def _parse_llm_json(
-    content: str,
+async def _llm_call_with_bisect(
+    openrouter: "OpenRouterResource",
+    build_prompt_fn: Any,
+    items: list[str],
     *,
+    prompt_args: tuple = (),
     operation: str,
-    chunk_idx: int,
-    total_chunks: int,
-    prompt: str,
+    result_keys: list[str],
+    model: str,
     dagster_log: Any = None,
-) -> dict[str, Any]:
-    """Parse JSON from LLM response, logging diagnostics on failure."""
-    parsed = json.loads(content)
-    if not isinstance(parsed, dict):
-        msg = f"{operation} LLM returned {type(parsed).__name__}, expected dict"
+) -> dict[str, list]:
+    """Make an LLM call; if the output is truncated (finish_reason='length'),
+    bisect the item list and retry each half recursively.
+
+    Args:
+        build_prompt_fn: Callable that builds the prompt. Called as
+            build_prompt_fn(*prompt_args, items_subset).
+        items: The list of names to process in this call.
+        prompt_args: Extra leading args passed to build_prompt_fn before items.
+        operation: Operation name for cost tracking.
+        result_keys: Keys to extract from the parsed JSON and aggregate.
+        model: Model identifier.
+        dagster_log: Optional Dagster logger.
+
+    Returns:
+        Dict mapping each result_key to its aggregated list.
+    """
+    prompt = build_prompt_fn(*prompt_args, items)
+    response = await openrouter.complete(
+        messages=[{"role": "user", "content": prompt}],
+        model=model,
+        operation=operation,
+        response_format={"type": "json_object"},
+        temperature=0.0,
+        max_tokens=MAX_OUTPUT_TOKENS,
+    )
+
+    finish_reason = response["choices"][0].get("finish_reason", "stop")
+    content = response["choices"][0]["message"]["content"]
+
+    if finish_reason == "length":
+        if len(items) <= 1:
+            raise RuntimeError(
+                f"{operation}: output truncated even with a single item; "
+                f"cannot bisect further. Item: {items}"
+            )
+        mid = len(items) // 2
+        log_fn = dagster_log.warning if dagster_log else logger.warning
+        log_fn(
+            f"{operation}: output truncated (finish_reason=length) for "
+            f"{len(items)} items — bisecting into {mid} + {len(items) - mid}"
+        )
+        left = await _llm_call_with_bisect(
+            openrouter,
+            build_prompt_fn,
+            items[:mid],
+            prompt_args=prompt_args,
+            operation=operation,
+            result_keys=result_keys,
+            model=model,
+            dagster_log=dagster_log,
+        )
+        right = await _llm_call_with_bisect(
+            openrouter,
+            build_prompt_fn,
+            items[mid:],
+            prompt_args=prompt_args,
+            operation=operation,
+            result_keys=result_keys,
+            model=model,
+            dagster_log=dagster_log,
+        )
+        merged: dict[str, list] = {}
+        for key in result_keys:
+            merged[key] = left.get(key, []) + right.get(key, [])
+        return merged
+
+    data = json.loads(content)
+    if not isinstance(data, dict):
+        msg = f"{operation} LLM returned {type(data).__name__}, expected dict"
         if dagster_log is not None:
             dagster_log.error(msg)
         raise ValueError(msg)
-    return parsed
+    return {key: data.get(key) or [] for key in result_keys}
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +167,9 @@ async def assign_skills_to_bags(
 ) -> dict[str, Any]:
     """Assign unprocessed skill names to existing bags or new_groups via LLM.
 
+    If the LLM output is truncated (hits max_tokens), the chunk is automatically
+    bisected and each half retried until the output fits.
+
     Args:
         openrouter: OpenRouter resource for API calls.
         existing_bags: List of { "canonical": str, "aliases": list[str] }.
@@ -114,27 +188,19 @@ async def assign_skills_to_bags(
     all_new_groups: list[str] = []
 
     chunks = _chunk_by_letter(unprocessed_names)
-    for chunk_idx, chunk in enumerate(chunks):
-        prompt = _build_assign_prompt(existing_bags, chunk)
-        response = await openrouter.complete(
-            messages=[{"role": "user", "content": prompt}],
+    for _chunk_idx, chunk in enumerate(chunks):
+        result = await _llm_call_with_bisect(
+            openrouter,
+            _build_assign_prompt,
+            chunk,
+            prompt_args=(existing_bags,),
+            operation="skill_normalization",
+            result_keys=["assignments", "new_groups"],
             model=model or DEFAULT_MODEL,
-            operation="skill_normalization",
-            response_format={"type": "json_object"},
-            temperature=0.0,
-            max_tokens=16_384,
-        )
-        content = response["choices"][0]["message"]["content"]
-        data = _parse_llm_json(
-            content,
-            operation="skill_normalization",
-            chunk_idx=chunk_idx,
-            total_chunks=len(chunks),
-            prompt=prompt,
             dagster_log=dagster_log,
         )
-        all_assignments.extend(data.get("assignments") or [])
-        all_new_groups.extend(data.get("new_groups") or [])
+        all_assignments.extend(result["assignments"])
+        all_new_groups.extend(result["new_groups"])
 
     return {"assignments": all_assignments, "new_groups": all_new_groups}
 
@@ -187,25 +253,16 @@ async def cluster_new_skills(
     all_clusters: list[dict[str, Any]] = []
 
     chunks = _chunk_by_letter(skill_names)
-    for chunk_idx, chunk in enumerate(chunks):
-        prompt = _build_cluster_prompt(chunk)
-        response = await openrouter.complete(
-            messages=[{"role": "user", "content": prompt}],
+    for _chunk_idx, chunk in enumerate(chunks):
+        result = await _llm_call_with_bisect(
+            openrouter,
+            _build_cluster_prompt,
+            chunk,
+            operation="skill_clustering",
+            result_keys=["clusters"],
             model=model or DEFAULT_MODEL,
-            operation="skill_clustering",
-            response_format={"type": "json_object"},
-            temperature=0.0,
-            max_tokens=16_384,
-        )
-        content = response["choices"][0]["message"]["content"]
-        data = _parse_llm_json(
-            content,
-            operation="skill_clustering",
-            chunk_idx=chunk_idx,
-            total_chunks=len(chunks),
-            prompt=prompt,
             dagster_log=dagster_log,
         )
-        all_clusters.extend(data.get("clusters") or [])
+        all_clusters.extend(result["clusters"])
 
     return all_clusters
