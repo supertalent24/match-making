@@ -369,7 +369,7 @@ def get_existing_bags_and_unprocessed_skills(context: OpExecutionContext) -> dic
 
     # Unprocessed: skills that are not a canonical and whose name is not an alias
     alias_names = {row[0] for row in session.execute(select(SkillAlias.alias)).all()}
-    canonical_ids = {s.id for (s,) in canonicals}
+    canonical_ids = {s.id for s in canonicals}
     unprocessed = (
         session.execute(select(Skill.name).where(Skill.id.not_in(canonical_ids))).scalars().all()
     )
