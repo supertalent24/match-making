@@ -1,15 +1,13 @@
-"""Airtable sensor for detecting new and updated candidate records.
+"""Airtable sensors for detecting changes in candidate and job records.
 
-This sensor uses cursor-based incremental sync to efficiently detect changes:
-- First run: Fetches all record IDs (full sync)
-- Subsequent runs: Only fetches records modified since last sync
-
-This approach reduces API calls from ~70 (for 6870 records) to typically 1-2
-for incremental updates.
+Sensors:
+- airtable_candidate_sensor: Cursor-based incremental sync for candidates.
+- airtable_job_matchmaking_sensor: Polls for 'Start Matchmaking' checkbox on jobs,
+  syncs human-edited (N) fields to DB, then triggers matchmaking.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from dagster import (
     RunRequest,
@@ -19,7 +17,9 @@ from dagster import (
 )
 
 from talent_matching.assets.candidates import candidate_partitions
-from talent_matching.jobs import candidate_pipeline_job
+from talent_matching.assets.jobs import job_partitions
+from talent_matching.jobs import candidate_pipeline_job, matchmaking_with_feedback_job
+from talent_matching.utils.airtable_mapper import airtable_normalized_job_fields_to_db
 
 
 @sensor(
@@ -30,113 +30,119 @@ from talent_matching.jobs import candidate_pipeline_job
 )
 def airtable_candidate_sensor(context: SensorEvaluationContext):
     """Detect new and updated candidates in Airtable using cursor-based sync.
-    
+
     Cursor format (JSON):
     {
         "last_sync": "2024-01-15T10:30:00.000Z",  # ISO timestamp
         "initialized": true                        # Whether initial sync completed
     }
-    
+
     Behavior:
     - First run (no cursor): Full sync of all record IDs
     - Subsequent runs: Only fetch records modified since last_sync
     - For existing partitions, triggers re-run (Dagster's data versioning handles skip)
     """
     airtable = context.resources.airtable
-    
+
     # Parse cursor (if exists)
     cursor_data = {"initialized": False, "last_sync": None}
     if context.cursor:
         cursor_data = json.loads(context.cursor)
-    
+
     # Track current sync time (before we start fetching)
-    current_sync_time = datetime.now(timezone.utc).isoformat()
-    
+    current_sync_time = datetime.now(UTC).isoformat()
+
     # Get existing partition keys
     existing_partitions = set(
-        context.instance.get_dynamic_partitions(
-            partitions_def_name=candidate_partitions.name
-        )
+        context.instance.get_dynamic_partitions(partitions_def_name=candidate_partitions.name)
     )
-    
+
     if not cursor_data.get("initialized"):
         # First run: Full sync to establish baseline
         context.log.info("First sync - fetching all record IDs from Airtable...")
-        
+
         all_record_ids = airtable.get_all_record_ids()
         context.log.info(f"Found {len(all_record_ids)} total records in Airtable")
-        
+
         # Find new records not yet in partitions
         new_record_ids = [rid for rid in all_record_ids if rid not in existing_partitions]
-        
+
         if new_record_ids:
             context.log.info(f"Adding {len(new_record_ids)} new partitions...")
             context.instance.add_dynamic_partitions(
                 partitions_def_name=candidate_partitions.name,
                 partition_keys=new_record_ids,
             )
-        
+
         # Update cursor
-        new_cursor = json.dumps({
-            "initialized": True,
-            "last_sync": current_sync_time,
-        })
+        new_cursor = json.dumps(
+            {
+                "initialized": True,
+                "last_sync": current_sync_time,
+            }
+        )
         context.update_cursor(new_cursor)
-        
+
         # Yield run requests for new records
         for record_id in new_record_ids:
             yield RunRequest(
                 run_key=f"candidate-init-{record_id}",
                 partition_key=record_id,
             )
-        
+
         if not new_record_ids:
             return SkipReason("Initial sync complete. No new records to process.")
-        
+
     else:
         # Incremental sync: Only fetch modified records
         last_sync = cursor_data.get("last_sync")
         context.log.info(f"Incremental sync - checking for changes since {last_sync}")
-        
+
         modified_records = airtable.fetch_records_modified_since(last_sync)
         context.log.info(f"Found {len(modified_records)} modified records")
-        
+
         if not modified_records:
             # Update cursor even if no changes (to move the window forward)
-            new_cursor = json.dumps({
-                "initialized": True,
-                "last_sync": current_sync_time,
-            })
+            new_cursor = json.dumps(
+                {
+                    "initialized": True,
+                    "last_sync": current_sync_time,
+                }
+            )
             context.update_cursor(new_cursor)
             return SkipReason(f"No changes since {last_sync}")
-        
+
         # Separate new vs updated records
         new_records = []
         updated_records = []
-        
+
         for record in modified_records:
             record_id = record.get("airtable_record_id")
             if record_id in existing_partitions:
                 updated_records.append(record_id)
             else:
                 new_records.append(record_id)
-        
-        context.log.info(f"New records: {len(new_records)}, Updated records: {len(updated_records)}")
-        
+
+        context.log.info(
+            f"New records: {len(new_records)}, Updated records: {len(updated_records)}"
+        )
+
         # Add new partitions
         if new_records:
             context.instance.add_dynamic_partitions(
                 partitions_def_name=candidate_partitions.name,
                 partition_keys=new_records,
             )
-        
+
         # Update cursor
-        new_cursor = json.dumps({
-            "initialized": True,
-            "last_sync": current_sync_time,
-        })
+        new_cursor = json.dumps(
+            {
+                "initialized": True,
+                "last_sync": current_sync_time,
+            }
+        )
         context.update_cursor(new_cursor)
-        
+
         # Yield run requests for all modified records (new + updated)
         for record_id in new_records:
             context.log.info(f"Triggering pipeline for NEW candidate: {record_id}")
@@ -144,10 +150,75 @@ def airtable_candidate_sensor(context: SensorEvaluationContext):
                 run_key=f"candidate-new-{record_id}-{current_sync_time}",
                 partition_key=record_id,
             )
-        
+
         for record_id in updated_records:
             context.log.info(f"Triggering pipeline for UPDATED candidate: {record_id}")
             yield RunRequest(
                 run_key=f"candidate-update-{record_id}-{current_sync_time}",
                 partition_key=record_id,
             )
+
+
+@sensor(
+    job=matchmaking_with_feedback_job,
+    minimum_interval_seconds=300,
+    description=(
+        "Polls Airtable jobs table for records with 'Start Matchmaking' checked. "
+        "Reads human-edited (N) fields, syncs to DB, unchecks the flag, and triggers matchmaking."
+    ),
+    required_resource_keys={"airtable_jobs", "matchmaking"},
+)
+def airtable_job_matchmaking_sensor(context: SensorEvaluationContext):
+    """Detect jobs with 'Start Matchmaking' checked, sync feedback, and trigger matchmaking.
+
+    For each flagged job:
+    1. Read all (N) fields from the Airtable record
+    2. Convert to DB column names and update normalized_jobs in Postgres
+    3. Uncheck 'Start Matchmaking' to prevent re-triggering
+    4. Yield RunRequest for matchmaking_with_feedback_job (re-generates vectors + matches)
+    """
+    airtable_jobs = context.resources.airtable_jobs
+    matchmaking = context.resources.matchmaking
+
+    records = airtable_jobs.fetch_records_with_start_matchmaking()
+    if not records:
+        return SkipReason("No jobs with 'Start Matchmaking' checked")
+
+    context.log.info(f"Found {len(records)} jobs with Start Matchmaking checked")
+
+    existing_partitions = set(
+        context.instance.get_dynamic_partitions(partitions_def_name=job_partitions.name)
+    )
+
+    now_iso = datetime.now(UTC).isoformat()
+
+    for record in records:
+        record_id = record.get("id")
+        if not record_id:
+            continue
+
+        if record_id not in existing_partitions:
+            context.log.warning(
+                f"Job {record_id} has Start Matchmaking checked but is not a known partition; skipping"
+            )
+            continue
+
+        raw_fields = record.get("fields", {})
+        db_fields = airtable_normalized_job_fields_to_db(raw_fields)
+
+        if db_fields:
+            updated = matchmaking.update_normalized_job_from_airtable(record_id, db_fields)
+            if updated:
+                context.log.info(
+                    f"Synced {len(db_fields)} (N) fields from Airtable to DB for {record_id}"
+                )
+            else:
+                context.log.warning(f"No normalized_jobs row for {record_id}; skipping DB sync")
+
+        airtable_jobs.update_record(record_id, {"Start Matchmaking": False})
+        context.log.info(f"Unchecked Start Matchmaking for {record_id}")
+
+        yield RunRequest(
+            run_key=f"matchmaking-feedback-{record_id}-{now_iso}",
+            partition_key=record_id,
+        )
