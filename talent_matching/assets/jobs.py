@@ -16,7 +16,6 @@ from dagster import (
     AllPartitionMapping,
     AssetExecutionContext,
     AssetIn,
-    Config,
     DataVersion,
     DynamicPartitionsDefinition,
     Output,
@@ -30,6 +29,7 @@ from talent_matching.llm.operations.normalize_job import (
 from talent_matching.llm.operations.normalize_job import (
     normalize_job,
 )
+from talent_matching.utils.airtable_mapper import normalized_job_to_airtable_fields
 
 # Dynamic partition definition for jobs (one partition per Airtable job record ID)
 job_partitions = DynamicPartitionsDefinition(name="jobs")
@@ -185,22 +185,21 @@ JOB_NARRATIVE_VECTOR_TYPES = [
     group_name="jobs",
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
-    code_version="2.0.0",  # v2: narrative-based, same vector_type as candidates
+    code_version="2.1.0",  # v2.1: add skill_* vectors from expected_capability
     op_tags={"dagster/concurrency_key": "openrouter_api"},
     metadata={
         "table": "job_vectors",
-        "vector_types": JOB_NARRATIVE_VECTOR_TYPES,
+        "vector_types": JOB_NARRATIVE_VECTOR_TYPES + ["skill_*"],
     },
 )
 def job_vectors(
     context: AssetExecutionContext,
     normalized_jobs: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Generate semantic embeddings from normalized job narratives for matching.
+    """Generate semantic embeddings from normalized job narratives and per-skill expected capability.
 
-    Builds six vectors from narrative columns (fallback to normalized_json.narratives):
-    experience, domain, personality, impact, technical, role_description.
-    Uses same embedding model as candidate_vectors for like-for-like similarity.
+    Builds six narrative vectors plus one vector per required skill that has expected_capability.
+    Uses same embedding model and skill_* key convention as candidate_vectors for like-for-like similarity.
     """
     record_id = context.partition_key
     openrouter = context.resources.openrouter
@@ -229,6 +228,25 @@ def job_vectors(
     ]
     vector_types = list(JOB_NARRATIVE_VECTOR_TYPES)
 
+    # Per-skill expected_capability vectors (same key convention as candidate skill_*)
+    requirements = (normalized_jobs.get("normalized_json") or normalized_jobs).get(
+        "requirements"
+    ) or {}
+    must_have = requirements.get("must_have_skills") or []
+    nice_to_have = requirements.get("nice_to_have_skills") or []
+
+    def _skill_key(name: str) -> str:
+        return f"skill_{name.lower().replace(' ', '_').replace('.', '')}"[:150]
+
+    for entry in must_have + nice_to_have:
+        if isinstance(entry, dict):
+            name = (entry.get("name") or "").strip()
+            cap = entry.get("expected_capability")
+            if name and isinstance(cap, str) and cap.strip():
+                texts_to_embed.append(f"{name}: {cap.strip()}")
+                vector_types.append(_skill_key(name))
+        # Legacy string-only entries: no expected_capability to embed
+
     result = asyncio.run(embed_text(openrouter, texts_to_embed))
     context.add_output_metadata(
         {
@@ -237,6 +255,7 @@ def job_vectors(
             "embedding_dimensions": result.dimensions,
             "embedding_model": result.model,
             "vectors_generated": len(result.embeddings),
+            "skill_vectors": len(vector_types) - len(JOB_NARRATIVE_VECTOR_TYPES),
         }
     )
 
@@ -253,54 +272,41 @@ def job_vectors(
     return vectors
 
 
-# Airtable column names for write-back (subset of normalized fields)
-AIRTABLE_JOBS_WRITEBACK_FIELDS = {
-    "title": "Hiring Job Title",
-    "company_name": "Company",
-}
-
-
-class AirtableJobSyncConfig(Config):
-    """Run config for airtable_job_sync. Set sync_to_airtable=True to write back to Airtable."""
-
-    sync_to_airtable: bool = False
-
-
 @asset(
     partitions_def=job_partitions,
     ins={"normalized_jobs": AssetIn()},
-    description="Optional: write back parsed job fields to the Airtable row (controlled by run config)",
+    description="Write all normalized job (N)-prefixed fields back to the Airtable row + set Start Matchmaking checkbox to false",
     group_name="jobs",
-    required_resource_keys={"airtable_jobs"},
+    required_resource_keys={"airtable_jobs", "matchmaking"},
     op_tags={"dagster/concurrency_key": "airtable_api"},
-    metadata={"optional_sync": True},
 )
 def airtable_job_sync(
     context: AssetExecutionContext,
-    config: AirtableJobSyncConfig,
     normalized_jobs: dict[str, Any],
 ) -> dict[str, Any]:
-    """Write a subset of normalized job fields back to the Airtable record.
+    """Write all normalized job fields back to the Airtable row under (N)-prefixed columns.
 
-    Only performs the write when run config sync_to_airtable is True (default False).
-    Fills Airtable columns (e.g. Hiring Job Title, Company) from LLM output.
+    Also sets the 'Start Matchmaking' checkbox to False (initial state, awaiting human review).
+    Loads full NormalizedJob from Postgres by airtable_record_id and PATCHes the record.
     """
     record_id = context.partition_key
-    if not config.sync_to_airtable:
-        context.log.info(f"Sync to Airtable disabled for {record_id} (sync_to_airtable=False)")
+    matchmaking = context.resources.matchmaking
+    job = matchmaking.get_normalized_job_by_airtable_record_id(record_id)
+    if not job:
+        context.log.warning(f"No normalized_jobs row for airtable_record_id={record_id}; skip sync")
         return {"airtable_record_id": record_id, "synced": False, "skipped": True, "fields": {}}
-    airtable = context.resources.airtable_jobs
-    fields_to_patch: dict[str, Any] = {}
-    for our_key, airtable_col in AIRTABLE_JOBS_WRITEBACK_FIELDS.items():
-        value = normalized_jobs.get(our_key)
-        if value is not None and str(value).strip():
-            fields_to_patch[airtable_col] = value.strip() if isinstance(value, str) else value
-    if not fields_to_patch:
+
+    fields = normalized_job_to_airtable_fields(job)
+    fields["Start Matchmaking"] = False
+
+    if not fields:
         context.log.info(f"No fields to sync for job {record_id}")
         return {"airtable_record_id": record_id, "synced": False, "fields": {}}
-    airtable.update_record(record_id, fields_to_patch)
-    context.log.info(f"Synced {record_id}: {list(fields_to_patch.keys())}")
-    return {"airtable_record_id": record_id, "synced": True, "fields": fields_to_patch}
+
+    airtable = context.resources.airtable_jobs
+    airtable.update_record(record_id, fields)
+    context.log.info(f"Synced {record_id}: {len(fields)} (N) columns + Start Matchmaking=false")
+    return {"airtable_record_id": record_id, "synced": True, "fields": fields}
 
 
 # Notion formula weights: role 40%, domain 35%, culture 25%
@@ -438,11 +444,35 @@ def _skill_coverage_score(
     return min(1.0, scored / total_weight)
 
 
+def _skill_key_from_name(skill_name: str) -> str:
+    """Same convention as candidate_vectors and job_vectors: skill_{lowercase_no_spaces}."""
+    return f"skill_{skill_name.lower().replace(' ', '_').replace('.', '')}"
+
+
 def _skill_semantic_score(
     job_role_vec: list[float] | None,
     cand_skill_vecs: dict[str, list[float]],
+    req_skills: list[dict[str, Any]] | None = None,
+    job_skill_vecs: dict[str, list[float]] | None = None,
 ) -> float:
-    """0-1: max similarity of job role_description to candidate skill_* vectors."""
+    """0-1: per-skill job expected_capability vs candidate skill_* when both exist; else role vs max cand skill."""
+    if req_skills and job_skill_vecs:
+        total_weight = 0.0
+        weighted_sim = 0.0
+        for s in req_skills:
+            name = (s.get("skill_name") or "").strip()
+            if not name:
+                continue
+            key = _skill_key_from_name(name)
+            job_vec = job_skill_vecs.get(key)
+            cand_vec = cand_skill_vecs.get(key)
+            if job_vec and cand_vec:
+                w = 3.0 if (s.get("requirement_type") or "must_have") == "must_have" else 1.0
+                total_weight += w
+                weighted_sim += _cosine_similarity(job_vec, cand_vec) * w
+        if total_weight > 0:
+            return weighted_sim / total_weight
+    # Fallback: job role_description vs max similarity to candidate skill_* vectors
     if not job_role_vec:
         return 0.5
     skill_keys = [k for k in cand_skill_vecs if k.startswith("skill_")]
@@ -489,7 +519,7 @@ def _seniority_penalty_and_experience_score(
     },
     description="Computed matches between jobs and candidates with scores (one partition per job)",
     group_name="matching",
-    code_version="2.1.0",  # raw vector (no rescaling); skill fit 80% rating, 20% semantic only when skill matches
+    code_version="2.2.0",  # skill semantic: job skill_* vs cand skill_* when both exist
     io_manager_key="postgres_io",
     required_resource_keys={"matchmaking"},
     metadata={
@@ -700,7 +730,9 @@ def matches(
             matching = [s for s in must_have + nice_to_have if s in candidate_skill_names]
 
             skill_coverage = _skill_coverage_score(req_skills, cand_skills_map_for_cand)
-            skill_semantic = _skill_semantic_score(job_role_vec, cvecs)
+            skill_semantic = _skill_semantic_score(
+                job_role_vec, cvecs, req_skills=req_skills, job_skill_vecs=jvecs
+            )
             # Semantic only when at least one skill matches; then 80% rating, 20% semantic (tie-breaker)
             if matching:
                 skill_fit_score = (

@@ -18,7 +18,6 @@ from typing import Any
 from dagster import (
     AssetExecutionContext,
     AssetIn,
-    Config,
     DataVersion,
     DynamicPartitionsDefinition,
     Output,
@@ -78,7 +77,7 @@ def airtable_candidates(context: AssetExecutionContext) -> Output[dict[str, Any]
     group_name="candidates",
     io_manager_key="postgres_io",
     required_resource_keys={"openrouter"},
-    code_version="1.2.0",  # v1.2.0: Always extract PDF, store both cv_text and cv_text_pdf
+    code_version="1.3.0",  # v1.3.0: Handle PDF extraction failures explicitly
     op_tags={
         "dagster/concurrency_key": "openrouter_api",
     },
@@ -141,8 +140,10 @@ def raw_candidates(
         cv_extraction_model = result.model
         cv_extraction_pages = result.pages_processed
 
-        # Check if extraction succeeded
-        if result.text and len(result.text.strip()) > 50:
+        if result.failed:
+            cv_extraction_method = "failed"
+            context.log.warning(f"PDF extraction failed for {record_id}: {result.error}")
+        elif result.text and len(result.text.strip()) > 50:
             cv_text_pdf = result.text
             cv_extraction_method = "pdf_text"
             context.log.info(
@@ -153,17 +154,17 @@ def raw_candidates(
             cv_extraction_method = "failed"
             context.log.warning(f"PDF extraction returned empty/short text for {record_id}")
 
-        # Add extraction metadata to output
-        context.add_output_metadata(
-            {
-                "cv_extraction_method": cv_extraction_method,
-                "cv_extraction_cost_usd": cv_extraction_cost_usd or 0,
-                "cv_extraction_model": cv_extraction_model or "none",
-                "cv_extraction_pages": cv_extraction_pages or 0,
-                "cv_text_pdf_length": len(cv_text_pdf) if cv_text_pdf else 0,
-                "cv_text_airtable_length": len(cv_text_airtable) if cv_text_airtable else 0,
-            }
-        )
+        extraction_metadata: dict[str, Any] = {
+            "cv_extraction_method": cv_extraction_method,
+            "cv_extraction_cost_usd": cv_extraction_cost_usd or 0,
+            "cv_extraction_model": cv_extraction_model or "none",
+            "cv_extraction_pages": cv_extraction_pages or 0,
+            "cv_text_pdf_length": len(cv_text_pdf) if cv_text_pdf else 0,
+            "cv_text_airtable_length": len(cv_text_airtable) if cv_text_airtable else 0,
+        }
+        if result.error:
+            extraction_metadata["cv_extraction_error"] = result.error
+        context.add_output_metadata(extraction_metadata)
     else:
         context.log.info("No cv_url available for PDF extraction")
 
@@ -385,7 +386,7 @@ def _get_proficiency_label(score: int) -> str:
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
-    code_version="4.0.0",  # v4.0.0: Added skill, position, project vectors
+    code_version="4.1.0",  # v4.1.0: Cap skill key length to fit DB column
     op_tags={
         # Limit concurrent OpenRouter API calls to avoid rate limits
         # Shares concurrency pool with normalized_candidates
@@ -476,8 +477,8 @@ def candidate_vectors(
         level_label = _get_proficiency_label(proficiency)
         skill_text = f"{skill_name}: {level_label} - {evidence}"
 
-        # Use sanitized skill name as key (lowercase, no spaces)
-        skill_key = f"skill_{skill_name.lower().replace(' ', '_').replace('.', '')}"
+        # Use sanitized skill name as key (lowercase, no spaces), capped to fit DB column
+        skill_key = f"skill_{skill_name.lower().replace(' ', '_').replace('.', '')}"[:150]
         texts_to_embed[skill_key] = skill_text
 
     # ═══════════════════════════════════════════════════════════════════
@@ -626,35 +627,23 @@ def candidate_role_fitness(
     return results
 
 
-class AirtableCandidateSyncConfig(Config):
-    """Run config for airtable_candidate_sync. Set sync_to_airtable=True to write back to Airtable."""
-
-    sync_to_airtable: bool = False
-
-
 @asset(
     partitions_def=candidate_partitions,
     ins={"normalized_candidates": AssetIn()},
-    description="Optional: write normalized candidate fields back to Airtable (N)-prefixed columns (controlled by run config)",
+    description="Write normalized candidate fields back to Airtable (N)-prefixed columns",
     group_name="candidates",
     required_resource_keys={"airtable", "matchmaking"},
     op_tags={"dagster/concurrency_key": "airtable_api"},
-    metadata={"optional_sync": True},
 )
 def airtable_candidate_sync(
     context: AssetExecutionContext,
-    config: AirtableCandidateSyncConfig,
     normalized_candidates: dict[str, Any],
 ) -> dict[str, Any]:
     """Write all normalized candidate fields back to the same Airtable row under (N)-prefixed columns.
 
-    Only performs the write when run config sync_to_airtable is True (default False).
     Loads full NormalizedCandidate from Postgres by airtable_record_id and PATCHes the record.
     """
     record_id = context.partition_key
-    if not config.sync_to_airtable:
-        context.log.info(f"Sync to Airtable disabled for {record_id} (sync_to_airtable=False)")
-        return {"airtable_record_id": record_id, "synced": False, "skipped": True, "fields": {}}
     matchmaking = context.resources.matchmaking
     candidate = matchmaking.get_normalized_candidate_by_airtable_record_id(record_id)
     if not candidate:

@@ -64,8 +64,7 @@ candidate_pipeline_job = define_asset_job(
     name="candidate_pipeline",
     description=(
         "Process candidates through the full pipeline: "
-        "fetch → store → normalize (LLM) → vectorize → role fitness → optional Airtable write-back. "
-        "Airtable sync is off by default; enable via run config (ops.airtable_candidate_sync.config.sync_to_airtable: true). "
+        "fetch → store → normalize (LLM) → vectorize → role fitness → Airtable write-back. "
         "Use Backfill to select partitions."
     ),
     selection=[
@@ -99,27 +98,15 @@ upload_normalized_to_airtable_job = define_asset_job(
     description=(
         "Upload normalized candidate data to Airtable (N)-prefixed columns only. "
         "Uses already-materialized normalized_candidates; does not re-run normalization. "
-        "Sync to Airtable is on by default for this job. Use Backfill to select which candidate partitions to sync."
+        "Use Backfill to select which candidate partitions to sync."
     ),
     selection=[airtable_candidate_sync],
     partitions_def=candidate_partitions,
-    config={
-        "ops": {
-            "airtable_candidate_sync": {
-                "config": {"sync_to_airtable": True},
-            },
-        },
-    },
 )
 
-# Job pipeline (partitioned per Airtable job record).
-# To write parsed data back to Airtable, set run config: ops → airtable_job_sync → config → sync_to_airtable: true
 job_pipeline_job = define_asset_job(
     name="job_pipeline",
-    description=(
-        "Process jobs: fetch → raw → normalize (LLM) → vectorize → optional Airtable write-back. "
-        "Airtable sync is off by default; enable via run config (ops.airtable_job_sync.config.sync_to_airtable: true)."
-    ),
+    description=("Process jobs: fetch → raw → normalize (LLM) → vectorize → Airtable write-back."),
     selection=[
         airtable_jobs,
         raw_jobs,
@@ -152,6 +139,28 @@ matchmaking_job = define_asset_job(
     ),
     selection=[matches],
     partitions_def=job_partitions,
+)
+
+upload_normalized_jobs_to_airtable_job = define_asset_job(
+    name="upload_normalized_jobs_to_airtable",
+    description=(
+        "Upload normalized job data to Airtable (N)-prefixed columns + set Start Matchmaking=false. "
+        "Uses already-materialized normalized_jobs; does not re-run normalization. "
+        "Use Backfill to select which job partitions to sync."
+    ),
+    selection=[airtable_job_sync],
+    partitions_def=job_partitions,
+)
+
+matchmaking_with_feedback_job = define_asset_job(
+    name="matchmaking_with_feedback",
+    description=(
+        "Re-generate job vectors and compute matches after human-edited (N) fields "
+        "have been synced from Airtable to DB. Triggered by the airtable_job_matchmaking_sensor."
+    ),
+    selection=[job_vectors, matches],
+    partitions_def=job_partitions,
+    op_retry_policy=openrouter_retry_policy,
 )
 
 
@@ -317,6 +326,8 @@ __all__ = [
     "job_pipeline_job",
     "job_ingest_job",
     "matchmaking_job",
+    "upload_normalized_jobs_to_airtable_job",
+    "matchmaking_with_feedback_job",
     "sync_airtable_candidates_job",
     "sync_airtable_jobs_job",
     "sample_candidates_job",
