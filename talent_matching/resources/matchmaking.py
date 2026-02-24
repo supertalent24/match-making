@@ -11,7 +11,7 @@ from talent_matching.db import get_session
 from talent_matching.models.candidates import CandidateSkill, NormalizedCandidate
 from talent_matching.models.enums import RequirementTypeEnum
 from talent_matching.models.jobs import JobRequiredSkill, NormalizedJob
-from talent_matching.models.skills import Skill
+from talent_matching.models.skills import Skill, SkillAlias
 from talent_matching.utils.airtable_mapper import (
     NORMALIZED_CANDIDATE_SYNCABLE_FIELDS,
     NORMALIZED_JOB_SYNCABLE_FIELDS,
@@ -24,6 +24,14 @@ class MatchmakingResource(ConfigurableResource):
     @staticmethod
     def _get_session() -> Session:
         return get_session()
+
+    @staticmethod
+    def _load_alias_to_canonical(session: Session) -> dict[str, str]:
+        """Load mapping of alias name -> canonical skill name from skill_aliases."""
+        rows = session.execute(
+            select(SkillAlias.alias, Skill.name).join(Skill, SkillAlias.skill_id == Skill.id)
+        ).all()
+        return {alias: canonical for alias, canonical in rows}
 
     def get_job_required_skills(
         self,
@@ -53,6 +61,7 @@ class MatchmakingResource(ConfigurableResource):
             .where(JobRequiredSkill.job_id.in_(uuids))
         )
         rows = session.execute(stmt).all()
+        alias_map = self._load_alias_to_canonical(session)
         session.close()
 
         result: dict[str, list[dict[str, Any]]] = {jid: [] for jid in job_ids}
@@ -61,7 +70,7 @@ class MatchmakingResource(ConfigurableResource):
             jid_str = str(job_id)
             result.setdefault(jid_str, []).append(
                 {
-                    "skill_name": name,
+                    "skill_name": alias_map.get(name, name),
                     "requirement_type": (
                         RequirementTypeEnum.NICE_TO_HAVE.value
                         if req_type == RequirementTypeEnum.NICE_TO_HAVE
@@ -100,6 +109,7 @@ class MatchmakingResource(ConfigurableResource):
             .where(CandidateSkill.candidate_id.in_(uuids))
         )
         rows = session.execute(stmt).all()
+        alias_map = self._load_alias_to_canonical(session)
         session.close()
 
         result: dict[str, list[dict[str, Any]]] = {cid: [] for cid in candidate_ids}
@@ -107,7 +117,7 @@ class MatchmakingResource(ConfigurableResource):
             cid_str = str(cand_id)
             result.setdefault(cid_str, []).append(
                 {
-                    "skill_name": name,
+                    "skill_name": alias_map.get(name, name),
                     "rating": int(rating) if rating is not None else 5,
                     "years_experience": int(years) if years is not None else None,
                 }
