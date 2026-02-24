@@ -26,6 +26,7 @@ from dagster import (
     Jitter,
     OpExecutionContext,
     RetryPolicy,
+    ScheduleDefinition,
     define_asset_job,
     job,
     op,
@@ -52,7 +53,10 @@ from talent_matching.assets.jobs import (
     raw_jobs,
 )
 from talent_matching.db import get_session
-from talent_matching.llm.operations.normalize_skills import assign_skills_to_bags
+from talent_matching.llm.operations.normalize_skills import (
+    assign_skills_to_bags,
+    cluster_new_skills,
+)
 from talent_matching.models.skills import Skill, SkillAlias
 
 # =============================================================================
@@ -403,6 +407,7 @@ def assign_unprocessed_skills_to_bags(context: OpExecutionContext, data: dict) -
             context.resources.openrouter,
             bags_for_prompt,
             unprocessed_names,
+            dagster_log=context.log,
         )
     )
     result["existing_bags"] = existing_bags
@@ -413,14 +418,46 @@ def assign_unprocessed_skills_to_bags(context: OpExecutionContext, data: dict) -
     return result
 
 
-@op(description="Apply assignments: insert skill_aliases rows")
+@op(
+    required_resource_keys={"openrouter"},
+    tags={"dagster/concurrency_key": "openrouter_api"},
+    description="Cluster unmatched skill names (new_groups) into new bags via LLM",
+)
+def cluster_unmatched_skills(context: OpExecutionContext, llm_result: dict) -> dict:
+    """Group new_groups into clusters so new alias bags can be created."""
+    new_groups = llm_result.get("new_groups") or []
+    if not new_groups:
+        context.log.info("No new_groups to cluster; skipping")
+        llm_result["clusters"] = []
+        return llm_result
+
+    clusters = asyncio.run(
+        cluster_new_skills(
+            context.resources.openrouter,
+            new_groups,
+            dagster_log=context.log,
+        )
+    )
+    llm_result["clusters"] = clusters
+    multi_alias = [c for c in clusters if c.get("aliases")]
+    context.log.info(
+        f"Clustered {len(new_groups)} unmatched names into {len(clusters)} groups "
+        f"({len(multi_alias)} with aliases, {len(clusters) - len(multi_alias)} singletons)"
+    )
+    return llm_result
+
+
+@op(description="Apply assignments and clusters: insert skill_aliases rows, create new bags")
 def apply_skill_assignments(context: OpExecutionContext, llm_result: dict) -> dict:
-    """Insert or update skill_aliases for each assignment (assign_to_canonical -> skill_id)."""
+    """Write alias rows for both existing-bag assignments and new clusters."""
     assignments = llm_result.get("assignments") or []
     existing_bags = llm_result.get("existing_bags") or []
+    clusters = llm_result.get("clusters") or []
     canonical_to_id = {b["canonical"]: UUID(b["skill_id"]) for b in existing_bags}
 
     session = get_session()
+
+    # 1. Apply assignments to existing bags
     applied = 0
     for item in assignments:
         skill_name = (item.get("skill_name") or "").strip()
@@ -444,11 +481,55 @@ def apply_skill_assignments(context: OpExecutionContext, llm_result: dict) -> di
         )
         session.execute(stmt)
         applied += 1
+
+    # 2. Create new bags from clusters
+    bags_created = 0
+    aliases_from_clusters = 0
+    for cluster in clusters:
+        canonical_name = (cluster.get("canonical") or "").strip()
+        aliases = cluster.get("aliases") or []
+        if not canonical_name or not aliases:
+            continue
+
+        canonical_skill = session.execute(
+            select(Skill).where(Skill.name == canonical_name)
+        ).scalar_one_or_none()
+        if canonical_skill is None:
+            context.log.warning(
+                f"Cluster canonical '{canonical_name}' not found in skills table; skipping"
+            )
+            continue
+
+        bags_created += 1
+        for alias_name in aliases:
+            alias_name = alias_name.strip()
+            if not alias_name or alias_name == canonical_name:
+                continue
+            stmt = insert(SkillAlias).values(
+                alias=alias_name,
+                skill_id=canonical_skill.id,
+                added_by="llm",
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["alias"],
+                set_={"skill_id": canonical_skill.id, "added_by": "llm"},
+            )
+            session.execute(stmt)
+            aliases_from_clusters += 1
+
     session.commit()
     session.close()
 
-    context.log.info(f"Applied {applied} skill alias assignments")
-    return {"applied": applied, "assignments_count": len(assignments)}
+    context.log.info(
+        f"Applied {applied} assignments to existing bags, "
+        f"created {bags_created} new bags with {aliases_from_clusters} aliases"
+    )
+    return {
+        "applied": applied,
+        "assignments_count": len(assignments),
+        "bags_created": bags_created,
+        "aliases_from_clusters": aliases_from_clusters,
+    }
 
 
 @job(
@@ -456,15 +537,25 @@ def apply_skill_assignments(context: OpExecutionContext, llm_result: dict) -> di
     op_retry_policy=openrouter_retry_policy,
 )
 def skill_normalization_job():
-    """Assign skills that are not yet in any bag to existing canonicals or new_groups.
+    """Normalize unprocessed skill names into alias bags.
 
     Op 1: load existing bags + unprocessed names from DB.
-    Op 2: call OpenRouter to assign each unprocessed name to a bag or new_groups.
-    Op 3: insert skill_aliases for each assignment.
+    Op 2: call LLM to assign each unprocessed name to an existing bag or new_groups.
+    Op 3: cluster new_groups into new bags via LLM (solves cold-start).
+    Op 4: insert skill_aliases for both assignments and new clusters.
     """
     data = get_existing_bags_and_unprocessed_skills()
     llm_result = assign_unprocessed_skills_to_bags(data)
-    apply_skill_assignments(llm_result)
+    llm_result_with_clusters = cluster_unmatched_skills(llm_result)
+    apply_skill_assignments(llm_result_with_clusters)
+
+
+skill_normalization_schedule = ScheduleDefinition(
+    name="skill_normalization_daily",
+    cron_schedule="0 2 * * *",
+    job=skill_normalization_job,
+    description="Run skill normalization daily at 02:00 UTC",
+)
 
 
 # Export all jobs
@@ -480,4 +571,6 @@ __all__ = [
     "sync_airtable_candidates_job",
     "sync_airtable_jobs_job",
     "sample_candidates_job",
+    "skill_normalization_job",
+    "skill_normalization_schedule",
 ]
