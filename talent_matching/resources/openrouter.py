@@ -17,9 +17,8 @@ from typing import Any
 import httpx
 from dagster import ConfigurableResource, get_dagster_logger
 from pydantic import Field, PrivateAttr
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
+from talent_matching.db import get_session
 from talent_matching.models.llm_costs import LLMCost
 
 
@@ -103,23 +102,6 @@ class OpenRouterResource(ConfigurableResource):
         default="Talent Matching Pipeline",
         description="Application name for OpenRouter analytics",
     )
-    # Database connection for cost tracking
-    postgres_host: str = Field(
-        default_factory=lambda: os.getenv("POSTGRES_HOST", "localhost"),
-    )
-    postgres_port: int = Field(
-        default_factory=lambda: int(os.getenv("POSTGRES_PORT", "5432")),
-    )
-    postgres_user: str = Field(
-        default_factory=lambda: os.getenv("POSTGRES_USER", "talent"),
-    )
-    postgres_password: str = Field(
-        default_factory=lambda: os.getenv("POSTGRES_PASSWORD", "talent_dev"),
-    )
-    postgres_db: str = Field(
-        default_factory=lambda: os.getenv("POSTGRES_DB", "talent_matching"),
-    )
-
     # Internal state (not configurable, uses Pydantic PrivateAttr)
     _context: LLMContext = PrivateAttr(default_factory=LLMContext)
     _run_costs: RunCostAccumulator = PrivateAttr(default_factory=RunCostAccumulator)
@@ -146,13 +128,6 @@ class OpenRouterResource(ConfigurableResource):
             code_version=code_version,
         )
 
-    def _get_db_url(self) -> str:
-        """Build PostgreSQL connection URL."""
-        return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
-
     async def _store_cost_record(
         self,
         operation: str,
@@ -166,7 +141,6 @@ class OpenRouterResource(ConfigurableResource):
         Uses a sync database operation wrapped in asyncio.to_thread to avoid
         blocking the event loop.
         """
-        # Accumulate for run-level totals
         self._run_costs.add(
             asset_key=self._context.asset_key or "unknown",
             cost_usd=cost_usd,
@@ -175,21 +149,21 @@ class OpenRouterResource(ConfigurableResource):
         )
 
         def _insert_record() -> None:
-            engine = create_engine(self._get_db_url())
-            with Session(engine) as session:
-                cost_record = LLMCost(
-                    run_id=self._context.run_id or "unknown",
-                    asset_key=self._context.asset_key or "unknown",
-                    partition_key=self._context.partition_key or None,
-                    operation=operation,
-                    model=model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cost_usd=cost_usd,
-                    code_version=self._context.code_version or None,
-                )
-                session.add(cost_record)
-                session.commit()
+            session = get_session()
+            cost_record = LLMCost(
+                run_id=self._context.run_id or "unknown",
+                asset_key=self._context.asset_key or "unknown",
+                partition_key=self._context.partition_key or None,
+                operation=operation,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+                code_version=self._context.code_version or None,
+            )
+            session.add(cost_record)
+            session.commit()
+            session.close()
 
         await asyncio.to_thread(_insert_record)
 

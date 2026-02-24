@@ -399,6 +399,46 @@ class AirtableJobsResource(ConfigurableResource):
                     break
         return record_ids
 
+    def fetch_record_raw_fields(self, record_id: str) -> dict[str, Any]:
+        """Fetch a single record and return the raw Airtable fields dict (not mapped).
+
+        Useful for reading (N)-prefixed fields and the Start Matchmaking checkbox.
+        """
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(
+                f"{self._base_url}/{record_id}",
+                headers=self._headers,
+            )
+            response.raise_for_status()
+            record = response.json()
+        return record.get("fields", {})
+
+    def fetch_records_with_start_matchmaking(self) -> list[dict[str, Any]]:
+        """Fetch all records where the 'Start Matchmaking' checkbox is checked.
+
+        Returns list of raw Airtable records (with 'id' and 'fields').
+        """
+        formula = "{Start Matchmaking} = TRUE()"
+        records: list[dict[str, Any]] = []
+        offset: str | None = None
+        with httpx.Client(timeout=30.0) as client:
+            while True:
+                params: dict[str, str] = {"filterByFormula": formula}
+                if offset:
+                    params["offset"] = offset
+                response = client.get(
+                    self._base_url,
+                    headers=self._headers,
+                    params=params,
+                )
+                response.raise_for_status()
+                data = response.json()
+                records.extend(data.get("records", []))
+                offset = data.get("offset")
+                if not offset:
+                    break
+        return records
+
     def update_record(self, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         """Update an Airtable job record with the given fields (PATCH).
 
