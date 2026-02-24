@@ -14,6 +14,12 @@ This documentation captures the key architectural patterns and principles for bu
 | [06](06-cross-join-matching.md) | **Cross-Join Matching** | Match new entities against all existing entities |
 | [07](07-llm-cost-tracking.md) | **LLM Cost Tracking** | Track costs per asset/run, estimate before deploying |
 
+### Troubleshooting
+
+| Doc | Topic |
+|-----|-------|
+| [Dagster termination thread / semaphore issue](../dagster-termination-thread-semaphore-issue.md) | macOS semaphore exhaustion with multiprocess executor; investigation and workarounds |
+
 ## Quick Reference
 
 ### Development vs Production
