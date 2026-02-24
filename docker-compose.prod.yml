@@ -1,0 +1,116 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: talent_matching_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-talent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-talent_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-talent_matching}
+    command: postgres -c max_connections=300
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-talent} -d ${POSTGRES_DB:-talent_matching}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - dagster_network
+
+  dagster-code:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dagster_code
+    entrypoint: ["/entrypoint.sh"]
+    command:
+      - dagster
+      - api
+      - grpc
+      - -h
+      - "0.0.0.0"
+      - -p
+      - "4266"
+      - -m
+      - talent_matching.definitions
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      ENVIRONMENT: production
+    volumes:
+      - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dagster_network
+
+  dagster-webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dagster_webserver
+    command:
+      - dagster-webserver
+      - -h
+      - "0.0.0.0"
+      - -p
+      - "3000"
+      - -w
+      - /opt/dagster/workspace.yaml
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      ENVIRONMENT: production
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
+      - ./docker/workspace.yaml:/opt/dagster/workspace.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dagster-code:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - dagster_network
+
+  dagster-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dagster_daemon
+    command:
+      - dagster-daemon
+      - run
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      ENVIRONMENT: production
+    volumes:
+      - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
+      - ./docker/workspace.yaml:/opt/dagster/workspace.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dagster-code:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - dagster_network
+
+volumes:
+  postgres_data:
+
+networks:
+  dagster_network:
+    driver: bridge
