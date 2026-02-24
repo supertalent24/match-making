@@ -31,7 +31,7 @@ from dagster import (
     job,
     op,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from talent_matching.assets.candidates import (
@@ -491,9 +491,11 @@ def apply_skill_assignments(context: OpExecutionContext, llm_result: dict) -> di
         if not canonical_name or not aliases:
             continue
 
-        canonical_skill = session.execute(
-            select(Skill).where(Skill.name == canonical_name)
-        ).scalar_one_or_none()
+        canonical_skill = (
+            session.execute(select(Skill).where(func.lower(Skill.name) == canonical_name.lower()))
+            .scalars()
+            .first()
+        )
         if canonical_skill is None:
             context.log.warning(
                 f"Cluster canonical '{canonical_name}' not found in skills table; skipping"
