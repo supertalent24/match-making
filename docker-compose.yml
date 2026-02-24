@@ -6,6 +6,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-talent}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-talent_dev}
       POSTGRES_DB: ${POSTGRES_DB:-talent_matching}
+    command: postgres -c max_connections=300
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:

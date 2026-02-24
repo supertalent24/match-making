@@ -1,5 +1,17 @@
 # Dagster instance configuration
-# This file configures how Dagster stores run history, schedules, and other metadata
+# This file configures how Dagster stores run history, schedules, and other metadata.
+#
+# Where the dev/RPC instance stores local data:
+# - If DAGSTER_HOME is set: instance root is $DAGSTER_HOME. Compute logs go to
+#   $DAGSTER_HOME/storage/<run_id>/compute_logs; local artifact storage uses $DAGSTER_HOME.
+# - If DAGSTER_HOME is not set: dagster dev uses the process cwd (this project dir) as the
+#   instance base, so storage/ and compute logs end up under this repo.
+# To put compute logs on a different disk, set DAGSTER_HOME to a path on that volume, or
+# add a compute_logs section with LocalComputeLogManager and config.base_dir.
+#
+# If you see "No space left on device" when launching a run (SemLock in multiprocessing):
+# on macOS this is usually the kernel semaphore limit, not disk. Reboot the Mac to clear
+# semaphore state, or close other Python/apps that use multiprocessing.
 
 # Use PostgreSQL for run storage (same DB as application data)
 run_storage:
@@ -57,10 +69,18 @@ run_launcher:
   module: dagster.core.launcher
   class: DefaultRunLauncher
 
-# Concurrency: limit concurrent ops per pool (e.g. openrouter_api, airtable_api)
-# Ops tagged with dagster/concurrency_key use this default limit; override in UI/CLI if needed.
-# Airtable API ops use concurrency_key "airtable_api" and share this limit (50).
+# Concurrency configuration (unified in newer Dagster versions)
+# - runs.max_concurrent_runs: max backfill/queued runs executing simultaneously
+#   Connection budget (PostgreSQL max_connections=300):
+#     Both app (talent_matching.db) and Dagster storage use NullPool — connections
+#     are transient but overlap across many concurrent subprocesses.
+#     Observed: ~6-8 transient connections per run (Dagster event log writes, run
+#     status updates, app DB ops). 20 runs × 8 = 160 peak, plus ~30 overhead = 190.
+#   Also bounded by 16 GB RAM: each run subprocess uses ~100-200 MB.
+# - pools.default_limit: max concurrent ops per concurrency key (airtable_api, openrouter_api)
 concurrency:
+  runs:
+    max_concurrent_runs: 20
   pools:
     default_limit: 50
 

@@ -26,9 +26,11 @@ from talent_matching.jobs import (
     job_ingest_job,
     job_pipeline_job,
     matchmaking_job,
+    matchmaking_with_feedback_job,
     sample_candidates_job,
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
+    upload_normalized_jobs_to_airtable_job,
     upload_normalized_to_airtable_job,
 )
 from talent_matching.resources import (
@@ -41,7 +43,11 @@ from talent_matching.resources import (
     OpenRouterResource,
     TwitterAPIResource,
 )
-from talent_matching.sensors.airtable_sensor import airtable_candidate_sensor
+from talent_matching.sensors.airtable_sensor import (
+    airtable_candidate_sensor,
+    airtable_job_matchmaking_sensor,
+)
+from talent_matching.sensors.run_failure_sensor import run_failure_tagger
 
 # Load environment variables from .env file (must be before resource initialization)
 load_dotenv()
@@ -91,28 +97,10 @@ dev_resources = {
     "linkedin_api": LinkedInAPIResource(
         data_source="mock",
     ),
-    # IO Managers for dual storage
-    "postgres_io": PostgresMetricsIOManager(
-        host=EnvVar("POSTGRES_HOST"),
-        port=EnvVar.int("POSTGRES_PORT"),
-        user=EnvVar("POSTGRES_USER"),
-        password=EnvVar("POSTGRES_PASSWORD"),
-        database=EnvVar("POSTGRES_DB"),
-    ),
-    "pgvector_io": PgVectorIOManager(
-        host=EnvVar("POSTGRES_HOST"),
-        port=EnvVar.int("POSTGRES_PORT"),
-        user=EnvVar("POSTGRES_USER"),
-        password=EnvVar("POSTGRES_PASSWORD"),
-        database=EnvVar("POSTGRES_DB"),
-    ),
-    "matchmaking": MatchmakingResource(
-        host=EnvVar("POSTGRES_HOST"),
-        port=EnvVar.int("POSTGRES_PORT"),
-        user=EnvVar("POSTGRES_USER"),
-        password=EnvVar("POSTGRES_PASSWORD"),
-        database=EnvVar("POSTGRES_DB"),
-    ),
+    # IO Managers and matchmaking — all share the process-wide engine from talent_matching.db
+    "postgres_io": PostgresMetricsIOManager(),
+    "pgvector_io": PgVectorIOManager(),
+    "matchmaking": MatchmakingResource(),
 }
 
 
@@ -141,6 +129,8 @@ all_jobs = [
     job_pipeline_job,
     job_ingest_job,
     matchmaking_job,
+    upload_normalized_jobs_to_airtable_job,
+    matchmaking_with_feedback_job,
     # Ops jobs (non-partitioned)
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
@@ -150,6 +140,8 @@ all_jobs = [
 # All sensors
 all_sensors = [
     airtable_candidate_sensor,
+    airtable_job_matchmaking_sensor,
+    run_failure_tagger,
 ]
 
 # Create the Dagster Definitions object
