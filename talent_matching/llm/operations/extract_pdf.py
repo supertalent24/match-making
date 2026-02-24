@@ -62,10 +62,15 @@ class ExtractPDFResult:
     model: str
     prompt_version: str
     pdf_engine: str = "unknown"
+    error: str | None = None
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+    @property
+    def failed(self) -> bool:
+        return self.error is not None
 
 
 async def download_pdf(url: str, timeout: float = 60.0) -> bytes:
@@ -85,10 +90,16 @@ async def download_pdf(url: str, timeout: float = 60.0) -> bytes:
 
 
 def get_pdf_page_count(pdf_bytes: bytes) -> int:
-    """Get page count from PDF bytes."""
+    """Get page count from PDF bytes.
+
+    Raises ValueError if the bytes are not a valid PDF.
+    """
     import fitz  # pymupdf
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as exc:
+        raise ValueError(f"Invalid PDF: {exc}") from exc
     count = len(doc)
     doc.close()
     return count
@@ -98,6 +109,24 @@ def pdf_to_base64(pdf_bytes: bytes) -> str:
     """Convert PDF bytes to base64 data URL for OpenRouter API."""
     b64 = base64.b64encode(pdf_bytes).decode("utf-8")
     return f"data:application/pdf;base64,{b64}"
+
+
+def _failed_result(
+    model: str,
+    engine_value: str,
+    error: str,
+) -> ExtractPDFResult:
+    return ExtractPDFResult(
+        text="",
+        pages_processed=0,
+        input_tokens=0,
+        output_tokens=0,
+        cost_usd=0.0,
+        model=model,
+        prompt_version=PROMPT_VERSION,
+        pdf_engine=engine_value,
+        error=error,
+    )
 
 
 async def extract_pdf_text(
@@ -110,6 +139,9 @@ async def extract_pdf_text(
 
     Uses OpenRouter's PDF processing engines directly, which is more efficient
     than converting to images.
+
+    Returns a result with ``error`` set (instead of raising) when the PDF is
+    invalid or the API rejects the request, so callers can fall back gracefully.
 
     Args:
         openrouter: OpenRouterResource instance for API calls
@@ -127,20 +159,13 @@ async def extract_pdf_text(
     engine = pdf_engine or DEFAULT_PDF_ENGINE
     engine_value = engine.value if isinstance(engine, PDFEngine) else engine
 
-    # Get page count
-    page_count = get_pdf_page_count(pdf_bytes)
+    try:
+        page_count = get_pdf_page_count(pdf_bytes)
+    except ValueError as exc:
+        return _failed_result(model, engine_value, str(exc))
 
     if page_count == 0:
-        return ExtractPDFResult(
-            text="",
-            pages_processed=0,
-            input_tokens=0,
-            output_tokens=0,
-            cost_usd=0.0,
-            model=model,
-            prompt_version=PROMPT_VERSION,
-            pdf_engine=engine_value,
-        )
+        return _failed_result(model, engine_value, "PDF has 0 pages")
 
     # Build message with PDF file content
     # OpenRouter supports PDF via the "file" content type with base64 data
@@ -168,17 +193,23 @@ async def extract_pdf_text(
         },
     ]
 
-    # Make request with PDF plugin configuration
-    response = await openrouter.complete(
-        messages=[
-            {"role": "user", "content": content_parts},
-        ],
-        model=model,
-        operation="extract_pdf",
-        temperature=0.0,
-        max_tokens=8000,  # CVs can be lengthy
-        plugins=plugins,
-    )
+    try:
+        response = await openrouter.complete(
+            messages=[
+                {"role": "user", "content": content_parts},
+            ],
+            model=model,
+            operation="extract_pdf",
+            temperature=0.0,
+            max_tokens=8000,  # CVs can be lengthy
+            plugins=plugins,
+        )
+    except httpx.HTTPStatusError as exc:
+        return _failed_result(
+            model,
+            engine_value,
+            f"OpenRouter API {exc.response.status_code}: {exc.response.text[:200]}",
+        )
 
     content = response["choices"][0]["message"]["content"]
     usage = response.get("usage", {})
@@ -204,6 +235,8 @@ async def extract_pdf_from_url(
     """Download PDF from URL and extract text using OpenRouter.
 
     Convenience function that combines download and extraction.
+    Returns a result with ``error`` set when download or extraction fails,
+    so the caller can fall back to other CV sources.
 
     Args:
         openrouter: OpenRouterResource instance for API calls
@@ -217,5 +250,13 @@ async def extract_pdf_from_url(
     Returns:
         ExtractPDFResult with extracted text and usage stats
     """
-    pdf_bytes = await download_pdf(pdf_url)
+    _model = model or DEFAULT_MODEL
+    _engine = pdf_engine or DEFAULT_PDF_ENGINE
+    _engine_value = _engine.value if isinstance(_engine, PDFEngine) else _engine
+
+    try:
+        pdf_bytes = await download_pdf(pdf_url)
+    except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
+        return _failed_result(_model, _engine_value, f"PDF download failed: {exc}")
+
     return await extract_pdf_text(openrouter, pdf_bytes, model=model, pdf_engine=pdf_engine)

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = "2.3.0"
+PROMPT_VERSION = "2.4.0"  # v2.4.0: Per-skill expected_capability for matchmaking
 
 # Default model for job normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -28,11 +28,11 @@ Output a single JSON object with this structure (use null when not mentioned):
 {
   "title": "Job title in English (translate if the posting is in another language)",
   "company_name": "Company name if mentioned",
-  "seniority_level": "JUNIOR|MID|SENIOR|LEAD|PRINCIPAL",
+  "seniority_level": "JUNIOR|MID|SENIOR|STAFF|LEAD|PRINCIPAL|EXECUTIVE",
   "employment_type": ["full-time", "part-time"] (array: list every type offered; infer from 'Vollzeit/Teilzeit', 'full or part time'; use ["full-time", "part-time"] when both offered)",
   "requirements": {
-    "must_have_skills": ["Canonical skill names: React, TypeScript, PostgreSQL, etc."],
-    "nice_to_have_skills": ["Canonical skill names preferred for matching"],
+    "must_have_skills": [{"name": "Canonical skill name", "expected_capability": "1-2 sentences: what the ideal candidate must be able to do with this skill in this role"}],
+    "nice_to_have_skills": [{"name": "Canonical skill name", "expected_capability": "1-2 sentences: what the ideal candidate should be able to do with this skill"}],
     "years_of_experience_min": <number or null>,
     "years_of_experience_max": <number or null>,
     "education_required": "Degree requirement or null",
@@ -80,9 +80,9 @@ Be factual. If information is not mentioned, use null.
 
 **Matchmaking:** Narratives and structured fields are embedded for semantic matching with candidate profiles. Describe the ideal candidate in the same terms candidates use: career journey, domain expertise, work style, impact level, technical depth. Same vocabulary improves match quality.
 
-**Seniority:** Use the same levels as candidate profiles (uppercase): JUNIOR, MID, SENIOR, LEAD, PRINCIPAL.
+**Seniority:** Use the same levels as candidate profiles (uppercase): JUNIOR, MID, SENIOR, STAFF (IC track), LEAD (management track), PRINCIPAL, EXECUTIVE.
 
-**Skills:** Use canonical skill names so they match candidate skill lists: e.g. "React" not "ReactJS", "TypeScript" not "TS", "PostgreSQL" not "Postgres". Apply to must_have_skills, nice_to_have_skills, and tech_stack.
+**Skills:** Use canonical skill names so they match candidate skill lists: e.g. "React" not "ReactJS", "TypeScript" not "TS", "PostgreSQL" not "Postgres". For each required skill, output an object with "name" and "expected_capability". The expected_capability is 1-2 sentences inferring from the job description what the ideal candidate must be capable of with that skill (e.g. "Design and implement REST APIs; integrate with internal services"). Use the same vocabulary as candidate skill evidence for better semantic matching. Apply to must_have_skills and nice_to_have_skills. tech_stack remains a simple array of canonical names.
 
 **Soft attribute requirements:** Infer minimum 1-5 scores from job description signals (e.g. "lead small team" -> leadership 3; "self-directed" -> autonomy 4). Use the same five dimensions as candidate profiles: leadership, autonomy, technical_depth, communication, growth_trajectory. Use null when not implied.
 

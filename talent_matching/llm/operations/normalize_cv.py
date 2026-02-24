@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = "4.0.0"  # v4.0.0: Add pure prose narratives for semantic vectorization
+PROMPT_VERSION = "5.0.0"  # v5.0.0: Fix seniority enum, add confidence_score/region, narrative alignment, drop is_current
 
 # Default model for CV normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -30,11 +30,14 @@ SYSTEM_PROMPT = """You are a CV parser. Extract and normalize the following CV i
   "years_of_experience": <total years as number or null>,
   "current_role": "Most recent job title",
   "summary": "2-3 sentence professional summary",
-  "seniority_level": "JUNIOR|MID|SENIOR|STAFF|PRINCIPAL|null",
+  "seniority_level": "JUNIOR|MID|SENIOR|STAFF|LEAD|PRINCIPAL|EXECUTIVE|null",
+
+  "confidence_score": <0.0-1.0 float: how confident you are in the overall extraction quality, penalize sparse or ambiguous CVs>,
 
   "location": {
     "city": "City name or null",
     "country": "Country name or null",
+    "region": "Geographic region (e.g., 'Europe', 'North America', 'Southeast Asia') or null",
     "timezone": "Timezone like 'America/New_York' or null"
   },
 
@@ -43,7 +46,7 @@ SYSTEM_PROMPT = """You are a CV parser. Extract and normalize the following CV i
       "name": "Skill name (e.g., 'Python', 'React', 'PostgreSQL')",
       "years": <estimated years of experience with this skill or null>,
       "proficiency": <1-10 rating based on evidence: 1-3=beginner, 4-6=intermediate, 7-8=advanced, 9-10=expert>,
-      "evidence": "Brief justification for the rating (e.g., 'Primary language in 3 roles, built production systems')"
+      "evidence": "What the candidate built or achieved with this skill and how capable they are: concrete outcomes, systems, or products (1-2 sentences). Used for semantic matchmaking with job requirements."
     }
   ],
 
@@ -54,7 +57,6 @@ SYSTEM_PROMPT = """You are a CV parser. Extract and normalize the following CV i
       "start_date": "YYYY-MM format (e.g., '2023-03') or null",
       "end_date": "YYYY-MM format or null if current job",
       "duration_months": <calculated months between dates or estimated>,
-      "is_current": <true if no end_date/still working there>,
       "description": "Full description of responsibilities and achievements",
       "technologies": ["Tech used in this role..."]
     }
@@ -133,7 +135,7 @@ IMPORTANT:
 - For experience dates, use YYYY-MM format (e.g., "2023-03"). Use null for end_date if current job
 - For social handles, extract just the username (e.g., "darshan9solanki" not "https://x.com/darshan9solanki")
 - Separate hackathons from general projects - hackathons have prizes/competitions
-- seniority_level must be uppercase: JUNIOR, MID, SENIOR, STAFF, or PRINCIPAL
+- seniority_level must be uppercase: JUNIOR, MID, SENIOR, STAFF (IC track), LEAD (management track), PRINCIPAL, or EXECUTIVE
 - Be factual. If information is missing, use null. Do not make up information.
 
 SKILL PROFICIENCY RATING GUIDELINES:
@@ -143,6 +145,9 @@ SKILL PROFICIENCY RATING GUIDELINES:
 - 8-9 (Expert): Tech lead/architect level, core contributor, 5+ years deep experience
 - 10 (World-class): Published author, major OSS maintainer, recognized expert
 - Base ratings on EVIDENCE in the CV, not assumptions. Be conservative if evidence is limited.
+
+SKILL EVIDENCE / ACHIEVEMENTS (for matchmaking):
+For each skill, the "evidence" field is used for semantic matching with job requirements. Describe in 1-2 sentences what the candidate built or delivered using this skill (e.g. "Built production trading engine in Rust; led design of multi-token staking rewards"). Avoid generic phrases; cite specific projects, scale, or impact so we can compare to what jobs expect.
 
 SOFT ATTRIBUTES RATING GUIDELINES (1-5 scale):
 
@@ -185,7 +190,9 @@ IMPORTANT: The "reasoning" field for each soft attribute should be a descriptive
 
 NARRATIVE WRITING GUIDELINES:
 
-The "narratives" section contains pure prose paragraphs optimized for semantic search. These will be embedded as vectors to match candidates with jobs. Write them as natural, flowing paragraphs - NO labels, NO bullet points, NO structured text.
+The "narratives" section contains pure prose paragraphs optimized for semantic search. These will be embedded as vectors and compared via cosine similarity against job description narratives. Write them as natural, flowing paragraphs - NO labels, NO bullet points, NO structured text.
+
+**Vocabulary alignment:** Use the same vocabulary and concepts that job descriptions use. For example, describe career progression ("progressed from X to Y"), domain expertise ("deep expertise in X, particularly Y"), work style ("async-first", "ownership mentality", "builder"), impact scope ("led a team of N", "platform serving N users"), and technical depth ("distributed systems", "architecture decisions", "infrastructure"). This alignment maximizes match quality between candidate and job embeddings.
 
 Experience narrative example:
 "Progressed from backend engineer to tech lead over five years, primarily in fintech and crypto. Built trading systems handling millions in daily volume at Coinbase, then led a team of eight engineers at a DeFi startup where they architected the core smart contract infrastructure. Most recent role involved full-stack ownership of a cross-chain bridge serving institutional clients."
