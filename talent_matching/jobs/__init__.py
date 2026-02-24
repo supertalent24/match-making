@@ -454,20 +454,41 @@ def apply_skill_assignments(context: OpExecutionContext, llm_result: dict) -> di
     existing_bags = llm_result.get("existing_bags") or []
     clusters = llm_result.get("clusters") or []
     canonical_to_id = {b["canonical"]: UUID(b["skill_id"]) for b in existing_bags}
+    canonical_to_id_lower = {k.lower(): v for k, v in canonical_to_id.items()}
 
     session = get_session()
 
+    def _resolve_canonical(canonical: str) -> UUID | None:
+        """Look up a canonical by name: first in existing bags (case-insensitive),
+        then fall back to the skills table."""
+        sid = canonical_to_id.get(canonical) or canonical_to_id_lower.get(canonical.lower())
+        if sid is not None:
+            return sid
+        skill = (
+            session.execute(select(Skill).where(func.lower(Skill.name) == canonical.lower()))
+            .scalars()
+            .first()
+        )
+        if skill is not None:
+            canonical_to_id[skill.name] = skill.id
+            canonical_to_id_lower[skill.name.lower()] = skill.id
+            return skill.id
+        return None
+
     # 1. Apply assignments to existing bags
     applied = 0
+    skipped = 0
     for item in assignments:
         skill_name = (item.get("skill_name") or "").strip()
         canonical = (item.get("assign_to_canonical") or "").strip()
         if not skill_name or not canonical:
             continue
-        skill_id = canonical_to_id.get(canonical)
+        skill_id = _resolve_canonical(canonical)
         if skill_id is None:
+            skipped += 1
             context.log.warning(
-                f"Assignment canonical '{canonical}' not in existing bags; skipping '{skill_name}'"
+                f"Assignment canonical '{canonical}' not found in bags or skills table; "
+                f"skipping '{skill_name}'"
             )
             continue
         stmt = insert(SkillAlias).values(
@@ -523,11 +544,12 @@ def apply_skill_assignments(context: OpExecutionContext, llm_result: dict) -> di
     session.close()
 
     context.log.info(
-        f"Applied {applied} assignments to existing bags, "
+        f"Applied {applied} assignments ({skipped} skipped), "
         f"created {bags_created} new bags with {aliases_from_clusters} aliases"
     )
     return {
         "applied": applied,
+        "skipped": skipped,
         "assignments_count": len(assignments),
         "bags_created": bags_created,
         "aliases_from_clusters": aliases_from_clusters,
