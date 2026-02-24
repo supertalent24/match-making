@@ -243,6 +243,7 @@ class JobRequiredSkill(Base):
         default=RequirementTypeEnum.MUST_HAVE,
     )
     min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_capability: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

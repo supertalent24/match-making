@@ -23,9 +23,7 @@ class CandidateVector(Base):
 
     __tablename__ = "candidate_vectors"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
 
     # Foreign key to raw candidate
     candidate_id: Mapped[UUID] = mapped_column(
@@ -36,17 +34,15 @@ class CandidateVector(Base):
 
     # Vector type and data
     vector_type: Mapped[str] = mapped_column(
-        String(50), nullable=False
-    )  # 'position', 'experience', 'domain_context', 'personality'
+        String(150), nullable=False
+    )  # 'experience', 'domain', 'skill_python', 'position_0', etc.
     vector: Mapped[list[float]] = mapped_column(
         Vector(1536), nullable=False
-    )  # OpenAI text-embedding-3-large dimensions
+    )  # OpenAI text-embedding-3-small dimensions
 
     # Metadata
-    model_version: Mapped[str] = mapped_column(String(50), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    model_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class JobVector(Base):
@@ -60,9 +56,7 @@ class JobVector(Base):
 
     __tablename__ = "job_vectors"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
 
     # Foreign key to raw job
     job_id: Mapped[UUID] = mapped_column(
@@ -73,14 +67,12 @@ class JobVector(Base):
 
     # Vector type and data
     vector_type: Mapped[str] = mapped_column(
-        String(50), nullable=False
-    )  # 'role_description', 'domain_context', 'culture'
+        String(150), nullable=False
+    )  # 'role_description', 'domain', 'skill_react', etc.
     vector: Mapped[list[float]] = mapped_column(
         Vector(1536), nullable=False
-    )  # OpenAI text-embedding-3-large dimensions
+    )  # OpenAI text-embedding-3-small dimensions
 
     # Metadata
-    model_version: Mapped[str] = mapped_column(String(50), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    model_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

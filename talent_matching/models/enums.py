@@ -28,6 +28,7 @@ class SeniorityEnum(str, enum.Enum):
     JUNIOR = "junior"
     MID = "mid"
     SENIOR = "senior"
+    STAFF = "staff"
     LEAD = "lead"
     PRINCIPAL = "principal"
     EXECUTIVE = "executive"
