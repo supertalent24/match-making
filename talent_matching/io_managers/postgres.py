@@ -10,11 +10,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from dagster import ConfigurableIOManager, InputContext, OutputContext
-from pydantic import Field
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from talent_matching.db import get_engine, get_session
 from talent_matching.models import (
     Match,
     NormalizedCandidate,
@@ -48,6 +48,16 @@ def _parse_employment_type(value: Any) -> EmploymentTypeEnum | None:
         if e.value == s or s in e.value:
             return e
     return None
+
+
+_SENIORITY_LOOKUP: dict[str, SeniorityEnum] = {e.value: e for e in SeniorityEnum}
+
+
+def _parse_seniority(value: Any) -> SeniorityEnum | None:
+    """Safely map an LLM-provided seniority string to the enum, or None."""
+    if value is None:
+        return None
+    return _SENIORITY_LOOKUP.get(str(value).strip().lower())
 
 
 def _parse_employment_types(value: Any) -> list[EmploymentTypeEnum] | None:
@@ -105,29 +115,13 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
     Uses SQLAlchemy ORM for type safety and automatic schema validation.
     """
 
-    host: str = Field(description="PostgreSQL host")
-    port: int = Field(description="PostgreSQL port")
-    user: str = Field(description="PostgreSQL user")
-    password: str = Field(description="PostgreSQL password")
-    database: str = Field(description="PostgreSQL database name")
+    @staticmethod
+    def _get_engine():
+        return get_engine()
 
-    _engine: Any = None
-    _session_factory: Any = None
-
-    def _get_engine(self):
-        """Create or return cached SQLAlchemy engine."""
-        if self._engine is None:
-            url = (
-                f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
-            )
-            self._engine = create_engine(url, pool_pre_ping=True)
-            self._session_factory = sessionmaker(bind=self._engine)
-        return self._engine
-
-    def _get_session(self) -> Session:
-        """Create a new database session."""
-        self._get_engine()
-        return self._session_factory()
+    @staticmethod
+    def _get_session() -> Session:
+        return get_session()
 
     def _extract_handle_from_url(self, url: str, domain: str) -> str | None:
         """Extract username/handle from a social media URL.
@@ -424,10 +418,12 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         if isinstance(location, dict):
             location_city = location.get("city")
             location_country = location.get("country")
+            location_region = location.get("region")
             timezone = location.get("timezone")
         else:
             location_city = None
             location_country = str(location) if location else None
+            location_region = None
             timezone = None
 
         # Extract social handles from LLM response
@@ -520,11 +516,11 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             "phone": normalized_json.get("phone"),
             "location_city": location_city,
             "location_country": location_country,
-            "location_region": None,
+            "location_region": location_region,
             "timezone": timezone,
             "professional_summary": normalized_json.get("summary"),
             "current_role": normalized_json.get("current_role"),
-            "seniority_level": normalized_json.get("seniority_level"),
+            "seniority_level": _parse_seniority(normalized_json.get("seniority_level")),
             "years_of_experience": normalized_json.get("years_of_experience"),
             "desired_job_categories": None,  # From raw data, not LLM
             "skills_summary": skills_list if skills_list else None,
@@ -1078,13 +1074,24 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         )
         must_have = req.get("must_have_skills") or []
         nice_to_have = req.get("nice_to_have_skills") or []
+
+        def _skill_entry(entry: Any) -> tuple[str | None, str | None]:
+            """Normalize skill entry: dict -> (name, expected_capability); string -> (name, None)."""
+            if isinstance(entry, dict):
+                name = (entry.get("name") or "").strip() or None
+                cap = entry.get("expected_capability")
+                cap = (cap.strip() if isinstance(cap, str) and cap.strip() else None) or None
+                return name, cap
+            if isinstance(entry, str) and entry.strip():
+                return entry.strip(), None
+            return None, None
+
         added_skill_ids: set[UUID] = set()
-        for skill_name in must_have:
-            if not (skill_name and str(skill_name).strip()):
+        for entry in must_have:
+            skill_name, expected_capability = _skill_entry(entry)
+            if not skill_name:
                 continue
-            skill_id = self._get_or_create_skill(
-                session, str(skill_name).strip(), is_requirement=True
-            )
+            skill_id = self._get_or_create_skill(session, skill_name, is_requirement=True)
             if skill_id and skill_id not in added_skill_ids:
                 added_skill_ids.add(skill_id)
                 session.add(
@@ -1093,14 +1100,14 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
                         job_id=normalized_job.id,
                         skill_id=skill_id,
                         requirement_type=RequirementTypeEnum.MUST_HAVE,
+                        expected_capability=expected_capability,
                     )
                 )
-        for skill_name in nice_to_have:
-            if not (skill_name and str(skill_name).strip()):
+        for entry in nice_to_have:
+            skill_name, expected_capability = _skill_entry(entry)
+            if not skill_name:
                 continue
-            skill_id = self._get_or_create_skill(
-                session, str(skill_name).strip(), is_requirement=True
-            )
+            skill_id = self._get_or_create_skill(session, skill_name, is_requirement=True)
             if skill_id and skill_id not in added_skill_ids:
                 added_skill_ids.add(skill_id)
                 session.add(
@@ -1109,6 +1116,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
                         job_id=normalized_job.id,
                         skill_id=skill_id,
                         requirement_type=RequirementTypeEnum.NICE_TO_HAVE,
+                        expected_capability=expected_capability,
                     )
                 )
         session.commit()

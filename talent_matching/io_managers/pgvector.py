@@ -8,11 +8,11 @@ from typing import Any
 from uuid import uuid4
 
 from dagster import ConfigurableIOManager, InputContext, OutputContext
-from pydantic import Field
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from talent_matching.db import get_engine, get_session
 from talent_matching.models import CandidateVector, JobVector, RawCandidate, RawJob
 
 
@@ -31,29 +31,13 @@ class PgVectorIOManager(ConfigurableIOManager):
     including cosine similarity search with HNSW indexes.
     """
 
-    host: str = Field(description="PostgreSQL host")
-    port: int = Field(description="PostgreSQL port")
-    user: str = Field(description="PostgreSQL user")
-    password: str = Field(description="PostgreSQL password")
-    database: str = Field(description="PostgreSQL database name")
+    @staticmethod
+    def _get_engine():
+        return get_engine()
 
-    _engine: Any = None
-    _session_factory: Any = None
-
-    def _get_engine(self):
-        """Create or return cached SQLAlchemy engine."""
-        if self._engine is None:
-            url = (
-                f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
-            )
-            self._engine = create_engine(url, pool_pre_ping=True)
-            self._session_factory = sessionmaker(bind=self._engine)
-        return self._engine
-
-    def _get_session(self) -> Session:
-        """Create a new database session."""
-        self._get_engine()
-        return self._session_factory()
+    @staticmethod
+    def _get_session() -> Session:
+        return get_session()
 
     def _get_table_name(self, context: OutputContext | InputContext) -> str:
         """Derive table name from asset key."""
