@@ -1,0 +1,12 @@
+---
+description: Create a git commit after each implemented feature or fix
+alwaysApply: true
+---
+
+# Commit Per Change
+
+After completing each distinct feature or fix, create a separate git commit immediately.
+
+- One commit per feature or fix — do not batch unrelated changes together.
+- Write a concise commit message that describes the "why", not just the "what".
+- If a task involves multiple independent features or fixes, commit each one as soon as it is complete before moving on to the next.
