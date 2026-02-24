@@ -24,7 +24,9 @@ from dagster import (
     asset,
 )
 
+from talent_matching.db import get_session
 from talent_matching.llm import PDFEngine, embed_text, extract_pdf_from_url, normalize_cv
+from talent_matching.skills.resolver import load_alias_map, resolve_skill_name, skill_vector_key
 from talent_matching.utils.airtable_mapper import normalized_candidate_to_airtable_fields
 
 # Dynamic partition definition for candidates
@@ -386,7 +388,7 @@ def _get_proficiency_label(score: int) -> str:
     group_name="candidates",
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
-    code_version="4.1.0",  # v4.1.0: Cap skill key length to fit DB column
+    code_version="4.2.0",  # v4.2.0: Canonicalize skill vector keys via alias resolver
     op_tags={
         # Limit concurrent OpenRouter API calls to avoid rate limits
         # Shares concurrency pool with normalized_candidates
@@ -467,19 +469,20 @@ def candidate_vectors(
     # ═══════════════════════════════════════════════════════════════════
     # SKILL VECTORS (structured: "Skill: Level - Evidence")
     # ═══════════════════════════════════════════════════════════════════
+    session = get_session()
+    alias_map = load_alias_map(session)
+    session.close()
+
     skills = normalized_json.get("skills", [])
     for skill in skills:
-        skill_name = skill.get("name", "Unknown")
+        raw_name = skill.get("name", "Unknown")
+        canonical_name = resolve_skill_name(raw_name, alias_map)
         proficiency = skill.get("proficiency", 5)
         evidence = skill.get("evidence", "")
 
-        # Build structured skill text
         level_label = _get_proficiency_label(proficiency)
-        skill_text = f"{skill_name}: {level_label} - {evidence}"
-
-        # Use sanitized skill name as key (lowercase, no spaces), capped to fit DB column
-        skill_key = f"skill_{skill_name.lower().replace(' ', '_').replace('.', '')}"[:150]
-        texts_to_embed[skill_key] = skill_text
+        skill_text = f"{canonical_name}: {level_label} - {evidence}"
+        texts_to_embed[skill_vector_key(canonical_name)] = skill_text
 
     # ═══════════════════════════════════════════════════════════════════
     # POSITION VECTORS (job descriptions)

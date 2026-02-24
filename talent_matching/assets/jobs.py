@@ -22,6 +22,7 @@ from dagster import (
     asset,
 )
 
+from talent_matching.db import get_session
 from talent_matching.llm.operations.embed_text import embed_text
 from talent_matching.llm.operations.normalize_job import (
     PROMPT_VERSION as NORMALIZE_JOB_PROMPT_VERSION,
@@ -29,6 +30,7 @@ from talent_matching.llm.operations.normalize_job import (
 from talent_matching.llm.operations.normalize_job import (
     normalize_job,
 )
+from talent_matching.skills.resolver import load_alias_map, resolve_skill_name, skill_vector_key
 from talent_matching.utils.airtable_mapper import normalized_job_to_airtable_fields
 
 # Dynamic partition definition for jobs (one partition per Airtable job record ID)
@@ -185,7 +187,7 @@ JOB_NARRATIVE_VECTOR_TYPES = [
     group_name="jobs",
     required_resource_keys={"openrouter"},
     io_manager_key="pgvector_io",
-    code_version="2.1.0",  # v2.1: add skill_* vectors from expected_capability
+    code_version="2.2.0",  # v2.2.0: Canonicalize skill vector keys via alias resolver
     op_tags={"dagster/concurrency_key": "openrouter_api"},
     metadata={
         "table": "job_vectors",
@@ -235,16 +237,18 @@ def job_vectors(
     must_have = requirements.get("must_have_skills") or []
     nice_to_have = requirements.get("nice_to_have_skills") or []
 
-    def _skill_key(name: str) -> str:
-        return f"skill_{name.lower().replace(' ', '_').replace('.', '')}"[:150]
+    session = get_session()
+    alias_map = load_alias_map(session)
+    session.close()
 
     for entry in must_have + nice_to_have:
         if isinstance(entry, dict):
             name = (entry.get("name") or "").strip()
             cap = entry.get("expected_capability")
             if name and isinstance(cap, str) and cap.strip():
-                texts_to_embed.append(f"{name}: {cap.strip()}")
-                vector_types.append(_skill_key(name))
+                canonical_name = resolve_skill_name(name, alias_map)
+                texts_to_embed.append(f"{canonical_name}: {cap.strip()}")
+                vector_types.append(skill_vector_key(canonical_name))
         # Legacy string-only entries: no expected_capability to embed
 
     result = asyncio.run(embed_text(openrouter, texts_to_embed))
@@ -444,11 +448,6 @@ def _skill_coverage_score(
     return min(1.0, scored / total_weight)
 
 
-def _skill_key_from_name(skill_name: str) -> str:
-    """Same convention as candidate_vectors and job_vectors: skill_{lowercase_no_spaces}."""
-    return f"skill_{skill_name.lower().replace(' ', '_').replace('.', '')}"
-
-
 def _skill_semantic_score(
     job_role_vec: list[float] | None,
     cand_skill_vecs: dict[str, list[float]],
@@ -463,7 +462,7 @@ def _skill_semantic_score(
             name = (s.get("skill_name") or "").strip()
             if not name:
                 continue
-            key = _skill_key_from_name(name)
+            key = skill_vector_key(name)
             job_vec = job_skill_vecs.get(key)
             cand_vec = cand_skill_vecs.get(key)
             if job_vec and cand_vec:

@@ -11,7 +11,8 @@ from talent_matching.db import get_session
 from talent_matching.models.candidates import CandidateSkill, NormalizedCandidate
 from talent_matching.models.enums import RequirementTypeEnum
 from talent_matching.models.jobs import JobRequiredSkill, NormalizedJob
-from talent_matching.models.skills import Skill, SkillAlias
+from talent_matching.models.skills import Skill
+from talent_matching.skills.resolver import get_or_create_skill, load_alias_map
 from talent_matching.utils.airtable_mapper import (
     NORMALIZED_CANDIDATE_SYNCABLE_FIELDS,
     NORMALIZED_JOB_SYNCABLE_FIELDS,
@@ -24,14 +25,6 @@ class MatchmakingResource(ConfigurableResource):
     @staticmethod
     def _get_session() -> Session:
         return get_session()
-
-    @staticmethod
-    def _load_alias_to_canonical(session: Session) -> dict[str, str]:
-        """Load mapping of alias name -> canonical skill name from skill_aliases."""
-        rows = session.execute(
-            select(SkillAlias.alias, Skill.name).join(Skill, SkillAlias.skill_id == Skill.id)
-        ).all()
-        return {alias: canonical for alias, canonical in rows}
 
     def get_job_required_skills(
         self,
@@ -61,7 +54,7 @@ class MatchmakingResource(ConfigurableResource):
             .where(JobRequiredSkill.job_id.in_(uuids))
         )
         rows = session.execute(stmt).all()
-        alias_map = self._load_alias_to_canonical(session)
+        alias_map = load_alias_map(session)
         session.close()
 
         result: dict[str, list[dict[str, Any]]] = {jid: [] for jid in job_ids}
@@ -109,7 +102,7 @@ class MatchmakingResource(ConfigurableResource):
             .where(CandidateSkill.candidate_id.in_(uuids))
         )
         rows = session.execute(stmt).all()
-        alias_map = self._load_alias_to_canonical(session)
+        alias_map = load_alias_map(session)
         session.close()
 
         result: dict[str, list[dict[str, Any]]] = {cid: [] for cid in candidate_ids}
@@ -217,7 +210,9 @@ class MatchmakingResource(ConfigurableResource):
             session.execute(delete(JobRequiredSkill).where(JobRequiredSkill.job_id == job.id))
             added_ids: set[UUID] = set()
             for skill_name in must_have_names:
-                skill_id = self._get_or_create_skill(session, skill_name)
+                skill_id = get_or_create_skill(
+                    session, skill_name, created_by="airtable_feedback", is_requirement=True
+                )
                 if skill_id and skill_id not in added_ids:
                     added_ids.add(skill_id)
                     session.add(
@@ -229,7 +224,9 @@ class MatchmakingResource(ConfigurableResource):
                         )
                     )
             for skill_name in nice_to_have_names:
-                skill_id = self._get_or_create_skill(session, skill_name)
+                skill_id = get_or_create_skill(
+                    session, skill_name, created_by="airtable_feedback", is_requirement=True
+                )
                 if skill_id and skill_id not in added_ids:
                     added_ids.add(skill_id)
                     session.add(
@@ -244,25 +241,3 @@ class MatchmakingResource(ConfigurableResource):
 
         session.close()
         return True
-
-    def _get_or_create_skill(self, session: Session, skill_name: str) -> UUID | None:
-        """Get existing skill ID by name/slug or create a new one."""
-        name = skill_name.strip()
-        if not name:
-            return None
-        slug = name.lower().replace(" ", "-").replace(".", "")[:100]
-        existing = session.execute(
-            select(Skill).where((Skill.slug == slug) | (Skill.name.ilike(name)))
-        ).scalar_one_or_none()
-        if existing:
-            return existing.id
-        new_skill = Skill(
-            id=uuid4(),
-            name=name,
-            slug=slug,
-            created_by="airtable_feedback",
-            is_requirement=True,
-        )
-        session.add(new_skill)
-        session.flush()
-        return new_skill.id

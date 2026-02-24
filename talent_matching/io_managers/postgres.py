@@ -37,7 +37,7 @@ from talent_matching.models.enums import (
     SeniorityEnum,
 )
 from talent_matching.models.jobs import JobRequiredSkill
-from talent_matching.models.skills import ReviewStatusEnum, Skill
+from talent_matching.skills.resolver import get_or_create_skill
 
 
 def _parse_employment_type(value: Any) -> EmploymentTypeEnum | None:
@@ -695,8 +695,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             if not skill_name:
                 continue
 
-            # Get or create the skill in the skills table
-            skill_id = self._get_or_create_skill(session, skill_name)
+            skill_id = get_or_create_skill(session, skill_name)
             if not skill_id:
                 continue
 
@@ -723,52 +722,6 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
 
         session.commit()
         context.log.info(f"Stored {skills_stored} skills for {partition_key}")
-
-    def _get_or_create_skill(
-        self,
-        session: Session,
-        skill_name: str,
-        *,
-        is_requirement: bool = False,
-    ) -> Any:
-        """Get existing skill ID or create a new one.
-
-        When creating a new skill, is_requirement is set (e.g. True for job requirements).
-        Existing skills are returned as-is; their is_requirement is not updated.
-        """
-        # Normalize skill name for slug (limited to 100 chars by database schema)
-        slug = skill_name.lower().strip().replace(" ", "-").replace(".", "")
-        if len(slug) > 100:
-            slug = slug[:100]  # Database column is String(100)
-
-        # Try to find existing skill by name (case-insensitive) or slug
-        existing = session.execute(
-            select(Skill).where((Skill.slug == slug) | (Skill.name.ilike(skill_name)))
-        ).scalar_one_or_none()
-
-        if existing:
-            return existing.id
-
-        # Create new skill
-        new_skill = Skill(
-            id=uuid4(),
-            name=skill_name.strip(),
-            slug=slug,
-            created_by="llm",
-            is_active=True,
-            review_status=ReviewStatusEnum.PENDING,
-            is_requirement=is_requirement,
-        )
-
-        try:
-            session.add(new_skill)
-            session.flush()
-            return new_skill.id
-        except Exception:
-            session.rollback()
-            # Might have been created by another process, try to fetch again
-            existing = session.execute(select(Skill).where(Skill.slug == slug)).scalar_one_or_none()
-            return existing.id if existing else None
 
     def _store_candidate_projects(
         self,
@@ -1091,7 +1044,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             skill_name, expected_capability = _skill_entry(entry)
             if not skill_name:
                 continue
-            skill_id = self._get_or_create_skill(session, skill_name, is_requirement=True)
+            skill_id = get_or_create_skill(session, skill_name, is_requirement=True)
             if skill_id and skill_id not in added_skill_ids:
                 added_skill_ids.add(skill_id)
                 session.add(
@@ -1107,7 +1060,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             skill_name, expected_capability = _skill_entry(entry)
             if not skill_name:
                 continue
-            skill_id = self._get_or_create_skill(session, skill_name, is_requirement=True)
+            skill_id = get_or_create_skill(session, skill_name, is_requirement=True)
             if skill_id and skill_id not in added_skill_ids:
                 added_skill_ids.add(skill_id)
                 session.add(
