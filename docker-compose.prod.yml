@@ -53,38 +53,6 @@ services:
     networks:
       - dagster_network
 
-  dagster-webserver:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: dagster_webserver
-    command:
-      - dagster-webserver
-      - -h
-      - "0.0.0.0"
-      - -p
-      - "3000"
-      - -w
-      - /opt/dagster/workspace.yaml
-    env_file:
-      - .env
-    environment:
-      POSTGRES_HOST: postgres
-      ENVIRONMENT: production
-    ports:
-      - "127.0.0.1:3000:3000"
-    volumes:
-      - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
-      - ./docker/workspace.yaml:/opt/dagster/workspace.yaml:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      dagster-code:
-        condition: service_started
-    restart: unless-stopped
-    networks:
-      - dagster_network
-
   dagster-daemon:
     build:
       context: .
