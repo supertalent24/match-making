@@ -51,6 +51,7 @@ from talent_matching.assets.jobs import (
     matches,
     normalized_jobs,
     raw_jobs,
+    upload_matches_to_ats,
 )
 from talent_matching.db import get_session
 from talent_matching.llm.operations.normalize_skills import (
@@ -604,11 +605,12 @@ skill_normalization_schedule = ScheduleDefinition(
 ats_matchmaking_pipeline_job = define_asset_job(
     name="ats_matchmaking_pipeline",
     description=(
-        "Normalize a job, compute vectors, and score matches. Triggered by "
-        "ats_matchmaking_sensor after it ingests the raw job to Postgres directly. "
-        "Starts from normalized_jobs (reads raw_jobs from Postgres IO manager)."
+        "Normalize a job, compute vectors, score matches, and upload results to ATS. "
+        "Triggered by ats_matchmaking_sensor after it ingests the raw job to Postgres. "
+        "Writes top 15 candidates as linked chips to 'AI PROPOSTED CANDIDATES' and "
+        "sets Job Status to 'Matchmaking Done'."
     ),
-    selection=[normalized_jobs, job_vectors, matches],
+    selection=[normalized_jobs, job_vectors, matches, upload_matches_to_ats],
     partitions_def=job_partitions,
     op_retry_policy=openrouter_retry_policy,
     tags={"dagster/concurrency_limit": "matchmaking"},

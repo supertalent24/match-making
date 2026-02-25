@@ -5,7 +5,8 @@ This module defines the asset graph for processing jobs and generating matches:
 2. raw_jobs: Resolved job description text (Notion fetch + Airtable mapping), stored in PostgreSQL
 3. normalized_jobs: LLM-normalized job requirements + narratives
 4. job_vectors: Semantic embeddings (experience, domain, personality, impact, technical, role_description)
-5. matches: Computed candidate-job matches (vector raw 0.4 role + 0.35 domain + 0.25 culture; skill fit 80% rating, 20% semantic when a skill matches; top 20)
+5. matches: Computed candidate-job matches (vector raw 0.4 role + 0.35 domain + 0.25 culture; skill fit 80% rating, 20% semantic when a skill matches; top 15)
+6. upload_matches_to_ats: Write matched candidates as linked chips to ATS and set Job Status to Matchmaking Done
 """
 
 import asyncio
@@ -327,7 +328,7 @@ def airtable_job_sync(
 ROLE_WEIGHT = 0.4
 DOMAIN_WEIGHT = 0.35
 CULTURE_WEIGHT = 0.25
-TOP_N_PER_JOB = 20
+TOP_N_PER_JOB = 15
 ALGORITHM_VERSION = "notion_v2"
 
 # Combined score = weighted blend (40% vector, 40% skill fit, 10% comp, 10% location) − seniority deduction
@@ -884,3 +885,77 @@ def matches(
 
     context.log.info(f"Computed {len(match_results)} matches ({TOP_N_PER_JOB} per job)")
     return match_results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ATS UPLOAD: push match results back to Airtable ATS table
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ATS_AI_PROPOSED_FIELD = "AI PROPOSTED CANDIDATES"
+ATS_JOB_STATUS_FIELD = "Job Status"
+ATS_MATCHMAKING_DONE_STATUS = "Matchmaking Done "  # trailing space matches Airtable choice
+
+
+@asset(
+    partitions_def=job_partitions,
+    ins={"matches": AssetIn()},
+    description="Upload top match results to ATS table as linked candidate chips and set Job Status to Matchmaking Done",
+    group_name="matching",
+    required_resource_keys={"airtable_ats"},
+    code_version="1.0.0",
+)
+def upload_matches_to_ats(
+    context: AssetExecutionContext,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Write matched candidates as linked records on the ATS row and flip status."""
+    record_id = context.partition_key
+    context.log.info(f"Uploading {len(matches)} matches to ATS for job {record_id}")
+
+    if not matches:
+        context.log.warning(
+            f"No matches for {record_id} — setting status to Matchmaking Done anyway"
+        )
+        ats = context.resources.airtable_ats
+        ats.update_record(record_id, {ATS_JOB_STATUS_FIELD: ATS_MATCHMAKING_DONE_STATUS})
+        return
+
+    candidate_norm_ids = [m["candidate_id"] for m in matches]
+
+    session = get_session()
+    from talent_matching.models.candidates import NormalizedCandidate
+
+    rows = (
+        session.query(NormalizedCandidate.id, NormalizedCandidate.airtable_record_id)
+        .filter(NormalizedCandidate.id.in_(candidate_norm_ids))
+        .all()
+    )
+    session.close()
+
+    norm_to_airtable: dict[str, str] = {
+        str(row.id): row.airtable_record_id for row in rows if row.airtable_record_id
+    }
+
+    sorted_matches = sorted(matches, key=lambda m: m.get("rank", 999))
+    linked_record_ids = []
+    for m in sorted_matches:
+        at_id = norm_to_airtable.get(m["candidate_id"])
+        if at_id:
+            linked_record_ids.append(at_id)
+
+    if not linked_record_ids:
+        context.log.warning(
+            f"No Airtable record IDs found for matched candidates on job {record_id}"
+        )
+
+    ats = context.resources.airtable_ats
+    fields: dict[str, Any] = {ATS_JOB_STATUS_FIELD: ATS_MATCHMAKING_DONE_STATUS}
+    if linked_record_ids:
+        fields[ATS_AI_PROPOSED_FIELD] = linked_record_ids
+
+    ats.update_record(record_id, fields)
+
+    context.log.info(
+        f"Uploaded {len(linked_record_ids)} candidate chips to '{ATS_AI_PROPOSED_FIELD}' "
+        f"and set Job Status to '{ATS_MATCHMAKING_DONE_STATUS}' for {record_id}"
+    )
