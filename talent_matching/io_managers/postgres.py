@@ -284,6 +284,28 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             partition_key = None
 
         if partition_key:
+            # Matches are keyed by job_id (FK to normalized_jobs), not by
+            # their own airtable_record_id. Resolve the partition key
+            # (an Airtable record ID) through normalized_jobs first.
+            if table_name == "matches":
+                nj_id = session.execute(
+                    select(NormalizedJob.id).where(
+                        NormalizedJob.airtable_record_id == partition_key
+                    )
+                ).scalar_one_or_none()
+                if nj_id:
+                    results = (
+                        session.execute(
+                            select(model).where(Match.job_id == nj_id).order_by(Match.rank)
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    session.close()
+                    return [self._model_to_dict(r) for r in results]
+                session.close()
+                return []
+
             # Partitioned asset - return single record by airtable_record_id
             if hasattr(model, "airtable_record_id"):
                 stmt = select(model).where(model.airtable_record_id == partition_key)
