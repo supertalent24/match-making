@@ -122,7 +122,7 @@ def _is_notion_url(url: str) -> bool:
     group_name="jobs",
     io_manager_key="postgres_io",
     required_resource_keys={"openrouter"},
-    code_version="2.0.0",  # v2: real normalize_job LLM + narratives
+    code_version="2.1.0",  # v2.1: pass recruiter non-negotiables & nice-to-haves to LLM
     metadata={
         "table": "normalized_jobs",
         "llm_operation": "normalize_job",
@@ -148,8 +148,18 @@ def normalized_jobs(
             "model_version": None,
             "narratives": {},
         }
+    non_negotiables = (raw_jobs.get("non_negotiables") or "").strip() or None
+    nice_to_have = (raw_jobs.get("nice_to_have") or "").strip() or None
+
     openrouter = context.resources.openrouter
-    result = asyncio.run(normalize_job(openrouter, job_description))
+    result = asyncio.run(
+        normalize_job(
+            openrouter,
+            job_description,
+            non_negotiables=non_negotiables,
+            nice_to_have=nice_to_have,
+        )
+    )
     data = result.data
     context.add_output_metadata(
         {

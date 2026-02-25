@@ -59,7 +59,7 @@ def _map_ats_record_to_raw_job(record: dict) -> dict:
     if isinstance(company_links, list) and company_links:
         company_name = company_links[0] if isinstance(company_links[0], str) else None
 
-    location_values = fields.get("Preferred Location", [])
+    location_values = fields.get("Preferred Location ", fields.get("Preferred Location", []))
     location_raw = ", ".join(location_values) if isinstance(location_values, list) else None
 
     level_values = fields.get("Level", [])
@@ -86,6 +86,8 @@ def _map_ats_record_to_raw_job(record: dict) -> dict:
         "status_raw": fields.get("Job Status"),
         "job_category_raw": category_raw,
         "x_url": None,
+        "non_negotiables": fields.get("Non Negotiables") or None,
+        "nice_to_have": fields.get("Nice-to-have") or None,
     }
 
 
@@ -121,6 +123,8 @@ def _ingest_raw_job(record: dict, notion_resource: object | None, log: object) -
         status_raw=mapped.get("status_raw"),
         job_category_raw=mapped.get("job_category_raw"),
         x_url=mapped.get("x_url"),
+        non_negotiables=mapped.get("non_negotiables"),
+        nice_to_have=mapped.get("nice_to_have"),
         processing_status=ProcessingStatusEnum.PENDING,
     )
     stmt = stmt.on_conflict_do_update(
@@ -135,6 +139,8 @@ def _ingest_raw_job(record: dict, notion_resource: object | None, log: object) -
             "work_setup_raw": mapped.get("work_setup_raw"),
             "status_raw": mapped.get("status_raw"),
             "job_category_raw": mapped.get("job_category_raw"),
+            "non_negotiables": mapped.get("non_negotiables"),
+            "nice_to_have": mapped.get("nice_to_have"),
             "processing_status": ProcessingStatusEnum.PENDING,
         },
     )

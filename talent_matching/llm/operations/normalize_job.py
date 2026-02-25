@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = "2.4.0"  # v2.4.0: Per-skill expected_capability for matchmaking
+PROMPT_VERSION = "2.5.0"  # v2.5.0: Incorporate recruiter non-negotiables & nice-to-haves
 
 # Default model for job normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -116,24 +116,53 @@ class NormalizeJobResult:
         return float(self.usage.get("cost", 0))
 
 
+def _build_user_prompt(
+    raw_job_text: str,
+    non_negotiables: str | None = None,
+    nice_to_have: str | None = None,
+) -> str:
+    parts = [f"Parse this job description:\n\n{raw_job_text}"]
+
+    if non_negotiables or nice_to_have:
+        parts.append(
+            "\n\n--- RECRUITER GUIDANCE ---\n"
+            "The recruiter has provided additional context below. Use it to "
+            "refine your classification of must_have_skills vs nice_to_have_skills, "
+            "and to strengthen or add requirements that the job description alone "
+            "may not make explicit."
+        )
+        if non_negotiables:
+            parts.append(f"\n**Non-negotiables (hard requirements):**\n{non_negotiables}")
+        if nice_to_have:
+            parts.append(f"\n**Nice-to-haves (preferred but not required):**\n{nice_to_have}")
+
+    return "\n".join(parts)
+
+
 async def normalize_job(
     openrouter: "OpenRouterResource",
     raw_job_text: str,
+    *,
+    non_negotiables: str | None = None,
+    nice_to_have: str | None = None,
 ) -> NormalizeJobResult:
     """Normalize a job description into structured format using LLM.
 
     Args:
         openrouter: OpenRouterResource instance for API calls
         raw_job_text: Raw job description text
+        non_negotiables: Recruiter-provided hard requirements (free text)
+        nice_to_have: Recruiter-provided nice-to-have preferences (free text)
 
     Returns:
         NormalizeJobResult with data, usage stats, and model for metadata
     """
     model = DEFAULT_MODEL
+    user_prompt = _build_user_prompt(raw_job_text, non_negotiables, nice_to_have)
     response = await openrouter.complete(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Parse this job description:\n\n{raw_job_text}"},
+            {"role": "user", "content": user_prompt},
         ],
         model=model,
         operation="normalize_job",

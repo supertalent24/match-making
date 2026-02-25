@@ -904,6 +904,8 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             "status_raw": _serialize_for_text(data.get("status_raw")),
             "job_category_raw": _serialize_for_text(data.get("job_category_raw")),
             "x_url": _serialize_for_text(data.get("x_url")),
+            "non_negotiables": _serialize_for_text(data.get("non_negotiables")),
+            "nice_to_have": _serialize_for_text(data.get("nice_to_have")),
             "processing_status": ProcessingStatusEnum.PENDING,
         }
 

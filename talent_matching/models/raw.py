@@ -136,6 +136,14 @@ class RawJob(Base):
     )  # "Frontend Engineer", etc. (multi-select JSON array)
     x_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Company X/Twitter profile
 
+    # ═══════════════════════════════════════════════════════════════════
+    # RECRUITER INPUT (from ATS Smart Job Profiles view)
+    # Free-text fields the recruiter fills in; fed to the LLM during
+    # normalization so it can prioritize must-have vs nice-to-have skills.
+    # ═══════════════════════════════════════════════════════════════════
+    non_negotiables: Mapped[str | None] = mapped_column(Text, nullable=True)
+    nice_to_have: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Timestamps
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
