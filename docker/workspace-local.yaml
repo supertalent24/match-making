@@ -1,0 +1,6 @@
+# Workspace config for running dagster-webserver locally while the code server
+# runs on a remote machine (accessed via SSH tunnel on localhost:4266).
+load_from:
+  - grpc_server:
+      host: localhost
+      port: 4266

@@ -8,7 +8,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-talent_matching}
     command: postgres -c max_connections=300
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -44,6 +44,8 @@ services:
       ENVIRONMENT: production
     volumes:
       - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
+    ports:
+      - "127.0.0.1:4266:4266"
     depends_on:
       postgres:
         condition: service_healthy
