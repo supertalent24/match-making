@@ -488,7 +488,7 @@ class AirtableATSResource(ConfigurableResource):
         "Job Description Text",
         "Job Description Link",
         "Company",
-        "Preferred Location",
+        "Preferred Location ",
         "Level",
         "Desired Job Category",
         "Work Set Up Preference",
@@ -525,18 +525,20 @@ class AirtableATSResource(ConfigurableResource):
 
         Returns list of raw Airtable records (with 'id' and 'fields').
         """
-        formula = f"{{Job Status}} = '{status}'"
+        formula = f'{{Job Status}} = "{status}"'
         records: list[dict[str, Any]] = []
         offset: str | None = None
 
         with httpx.Client(timeout=30.0) as client:
             while True:
+                params: list[tuple[str, str]] = [("filterByFormula", formula)]
+                params.extend(("fields[]", f) for f in self.ATS_JOB_FIELDS)
+                if offset:
+                    params.append(("offset", offset))
                 response = client.get(
                     self._base_url,
                     headers=self._headers,
-                    params=[("filterByFormula", formula)]
-                    + [("fields[]", f) for f in self.ATS_JOB_FIELDS]
-                    + ([("offset", offset)] if offset else []),
+                    params=params,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -582,7 +584,7 @@ class AirtableATSResource(ConfigurableResource):
         if isinstance(company_links, list) and company_links:
             company_name = company_links[0] if isinstance(company_links[0], str) else None
 
-        location_values = fields.get("Preferred Location", [])
+        location_values = fields.get("Preferred Location ", fields.get("Preferred Location", []))
         location_raw = ", ".join(location_values) if isinstance(location_values, list) else None
 
         level_values = fields.get("Level", [])
