@@ -595,6 +595,26 @@ skill_normalization_schedule = ScheduleDefinition(
 )
 
 
+# ---------------------------------------------------------------------------
+# ATS-driven pipeline: sensor ingests raw job from ATS, then this job runs
+# normalized_jobs → job_vectors → matches.  raw_jobs must already exist in
+# Postgres (written by the sensor before launching this job).
+# ---------------------------------------------------------------------------
+
+ats_matchmaking_pipeline_job = define_asset_job(
+    name="ats_matchmaking_pipeline",
+    description=(
+        "Normalize a job, compute vectors, and score matches. Triggered by "
+        "ats_matchmaking_sensor after it ingests the raw job to Postgres directly. "
+        "Starts from normalized_jobs (reads raw_jobs from Postgres IO manager)."
+    ),
+    selection=[normalized_jobs, job_vectors, matches],
+    partitions_def=job_partitions,
+    op_retry_policy=openrouter_retry_policy,
+    tags={"dagster/concurrency_limit": "matchmaking"},
+)
+
+
 # Export all jobs
 __all__ = [
     "candidate_pipeline_job",
@@ -610,4 +630,5 @@ __all__ = [
     "sample_candidates_job",
     "skill_normalization_job",
     "skill_normalization_schedule",
+    "ats_matchmaking_pipeline_job",
 ]

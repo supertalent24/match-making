@@ -8,7 +8,7 @@ Tech Assignment table. It supports:
 """
 
 import hashlib
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from dagster import ConfigurableResource
@@ -465,3 +465,148 @@ class AirtableJobsResource(ConfigurableResource):
                 )
             response.raise_for_status()
             return response.json()
+
+
+class AirtableATSResource(ConfigurableResource):
+    """Airtable API resource for the ATS table (job process / matchmaking workflow).
+
+    The ATS table drives the recruiting workflow. This resource polls for
+    Job Status changes and reads/writes match-related columns.
+    """
+
+    base_id: str = Field(description="Airtable base ID (starts with 'app')")
+    table_id: str = Field(description="ATS table ID (tblrbhITEIBOxwcQV)")
+    api_key: str = Field(description="Airtable Personal Access Token")
+    write_api_key: str | None = Field(
+        default=None,
+        description="Optional token with data.records:write scope for PATCH.",
+    )
+
+    ATS_JOB_FIELDS: ClassVar[list[str]] = [
+        "Open Position (Job Title)",
+        "Job Status",
+        "Job Description Text",
+        "Job Description Link",
+        "Company",
+        "Preferred Location",
+        "Level",
+        "Desired Job Category",
+        "Work Set Up Preference",
+        "Projected Salary",
+        "Non Negotiables",
+        "Nice-to-have",
+        "Notes",
+        "Last Job Status Change",
+    ]
+
+    @property
+    def _base_url(self) -> str:
+        return f"https://api.airtable.com/v0/{self.base_id}/{self.table_id}"
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        raw = self.api_key
+        token = raw.get_secret_value() if hasattr(raw, "get_secret_value") else raw
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+    def _write_headers(self) -> dict[str, str]:
+        raw = self.write_api_key or self.api_key
+        token = raw.get_secret_value() if hasattr(raw, "get_secret_value") else raw
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+    def fetch_records_by_status(self, status: str) -> list[dict[str, Any]]:
+        """Fetch ATS records matching a specific Job Status value.
+
+        Returns list of raw Airtable records (with 'id' and 'fields').
+        """
+        formula = f"{{Job Status}} = '{status}'"
+        records: list[dict[str, Any]] = []
+        offset: str | None = None
+
+        with httpx.Client(timeout=30.0) as client:
+            while True:
+                response = client.get(
+                    self._base_url,
+                    headers=self._headers,
+                    params=[("filterByFormula", formula)]
+                    + [("fields[]", f) for f in self.ATS_JOB_FIELDS]
+                    + ([("offset", offset)] if offset else []),
+                )
+                response.raise_for_status()
+                data = response.json()
+                records.extend(data.get("records", []))
+                offset = data.get("offset")
+                if not offset:
+                    break
+        return records
+
+    def fetch_record_by_id(self, record_id: str) -> dict[str, Any]:
+        """Fetch a single ATS record by ID."""
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(
+                f"{self._base_url}/{record_id}",
+                headers=self._headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    def update_record(self, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Update an ATS record (PATCH)."""
+        with httpx.Client(timeout=30.0) as client:
+            response = client.patch(
+                f"{self._base_url}/{record_id}",
+                headers=self._write_headers(),
+                json={"fields": fields},
+            )
+            if response.status_code == 403:
+                raise httpx.HTTPStatusError(
+                    "403 Forbidden: token needs data.records:write scope for ATS table.",
+                    request=response.request,
+                    response=response,
+                )
+            response.raise_for_status()
+            return response.json()
+
+    def map_ats_record_to_raw_job(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Map an ATS record to RawJob-compatible fields for Postgres ingestion."""
+        fields = record.get("fields", {})
+
+        company_links = fields.get("Company", [])
+        company_name = None
+        if isinstance(company_links, list) and company_links:
+            company_name = company_links[0] if isinstance(company_links[0], str) else None
+
+        location_values = fields.get("Preferred Location", [])
+        location_raw = ", ".join(location_values) if isinstance(location_values, list) else None
+
+        level_values = fields.get("Level", [])
+        level_raw = ", ".join(level_values) if isinstance(level_values, list) else None
+
+        category_values = fields.get("Desired Job Category", [])
+        category_raw = ", ".join(category_values) if isinstance(category_values, list) else None
+
+        work_setup = fields.get("Work Set Up Preference", [])
+        work_setup_raw = ", ".join(work_setup) if isinstance(work_setup, list) else None
+
+        return {
+            "airtable_record_id": record.get("id"),
+            "source": "airtable_ats",
+            "source_id": record.get("id"),
+            "source_url": fields.get("Job Description Link"),
+            "job_title": fields.get("Open Position (Job Title)"),
+            "company_name": company_name,
+            "job_description": fields.get("Job Description Text") or "",
+            "company_website_url": None,
+            "experience_level_raw": level_raw,
+            "location_raw": location_raw,
+            "work_setup_raw": work_setup_raw,
+            "status_raw": fields.get("Job Status"),
+            "job_category_raw": category_raw,
+            "x_url": None,
+        }

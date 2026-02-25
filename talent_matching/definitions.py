@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from talent_matching.assets import candidates, jobs, social
 from talent_matching.io_managers import PgVectorIOManager, PostgresMetricsIOManager
 from talent_matching.jobs import (
+    ats_matchmaking_pipeline_job,
     candidate_ingest_job,
     candidate_pipeline_job,
     candidate_vectors_job,
@@ -37,6 +38,7 @@ from talent_matching.jobs import (
     upload_normalized_to_airtable_job,
 )
 from talent_matching.resources import (
+    AirtableATSResource,
     AirtableJobsResource,
     AirtableResource,
     GitHubAPIResource,
@@ -50,6 +52,7 @@ from talent_matching.sensors.airtable_sensor import (
     airtable_candidate_sensor,
     airtable_job_matchmaking_sensor,
 )
+from talent_matching.sensors.ats_matchmaking_sensor import ats_matchmaking_sensor
 from talent_matching.sensors.run_failure_sensor import run_failure_tagger
 
 # Load environment variables from .env file (must be before resource initialization)
@@ -78,6 +81,13 @@ dev_resources = {
     "airtable_jobs": AirtableJobsResource(
         base_id=EnvVar("AIRTABLE_BASE_ID"),
         table_id=EnvVar("AIRTABLE_JOBS_TABLE_ID"),
+        api_key=EnvVar("AIRTABLE_API_KEY"),
+        write_api_key=os.getenv("AIRTABLE_WRITE_TOKEN") or None,
+    ),
+    # ATS table for Job Process / Smart Job Profiles workflow
+    "airtable_ats": AirtableATSResource(
+        base_id=EnvVar("AIRTABLE_BASE_ID"),
+        table_id=os.getenv("AIRTABLE_ATS_TABLE_ID", "tblrbhITEIBOxwcQV"),
         api_key=EnvVar("AIRTABLE_API_KEY"),
         write_api_key=os.getenv("AIRTABLE_WRITE_TOKEN") or None,
     ),
@@ -140,6 +150,8 @@ all_jobs = [
     sync_airtable_jobs_job,
     sample_candidates_job,
     skill_normalization_job,
+    # ATS-driven pipeline (sensor-triggered)
+    ats_matchmaking_pipeline_job,
 ]
 
 # Schedules
@@ -151,6 +163,7 @@ all_schedules = [
 all_sensors = [
     airtable_candidate_sensor,
     airtable_job_matchmaking_sensor,
+    ats_matchmaking_sensor,
     run_failure_tagger,
 ]
 
