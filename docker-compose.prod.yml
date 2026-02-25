@@ -72,7 +72,7 @@ services:
       POSTGRES_HOST: postgres
       ENVIRONMENT: production
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
       - ./docker/workspace.yaml:/opt/dagster/workspace.yaml:ro
