@@ -898,55 +898,72 @@ ATS_MATCHMAKING_DONE_STATUS = "Matchmaking Done "  # trailing space matches Airt
 
 @asset(
     partitions_def=job_partitions,
-    ins={"matches": AssetIn()},
+    deps=[matches],
     description="Upload top match results to ATS table as linked candidate chips and set Job Status to Matchmaking Done",
     group_name="matching",
     required_resource_keys={"airtable_ats"},
-    code_version="1.0.0",
+    code_version="1.1.0",
 )
 def upload_matches_to_ats(
     context: AssetExecutionContext,
-    matches: list[dict[str, Any]],
 ) -> None:
-    """Write matched candidates as linked records on the ATS row and flip status."""
-    record_id = context.partition_key
-    context.log.info(f"Uploading {len(matches)} matches to ATS for job {record_id}")
+    """Read matches from Postgres by job_id and write as linked candidate chips to ATS."""
+    from talent_matching.models.candidates import NormalizedCandidate
+    from talent_matching.models.jobs import NormalizedJob
+    from talent_matching.models.matches import Match
 
-    if not matches:
-        context.log.warning(
-            f"No matches for {record_id} — setting status to Matchmaking Done anyway"
-        )
+    record_id = context.partition_key
+    context.log.info(f"Uploading matches to ATS for job {record_id}")
+
+    session = get_session()
+
+    nj = (
+        session.query(NormalizedJob.id)
+        .filter(NormalizedJob.airtable_record_id == record_id)
+        .first()
+    )
+    if not nj:
+        context.log.error(f"No normalized job found for {record_id}")
+        session.close()
+        return
+
+    match_rows = (
+        session.query(Match.candidate_id, Match.rank)
+        .filter(Match.job_id == nj.id)
+        .order_by(Match.rank)
+        .all()
+    )
+    context.log.info(f"Found {len(match_rows)} matches in Postgres for job {record_id}")
+
+    if not match_rows:
+        session.close()
+        context.log.warning("No matches — setting status to Matchmaking Done anyway")
         ats = context.resources.airtable_ats
         ats.update_record(record_id, {ATS_JOB_STATUS_FIELD: ATS_MATCHMAKING_DONE_STATUS})
         return
 
-    candidate_norm_ids = [m["candidate_id"] for m in matches]
+    candidate_ids = [str(row.candidate_id) for row in match_rows]
 
-    session = get_session()
-    from talent_matching.models.candidates import NormalizedCandidate
-
-    rows = (
+    cand_rows = (
         session.query(NormalizedCandidate.id, NormalizedCandidate.airtable_record_id)
-        .filter(NormalizedCandidate.id.in_(candidate_norm_ids))
+        .filter(NormalizedCandidate.id.in_(candidate_ids))
         .all()
     )
     session.close()
 
     norm_to_airtable: dict[str, str] = {
-        str(row.id): row.airtable_record_id for row in rows if row.airtable_record_id
+        str(row.id): row.airtable_record_id for row in cand_rows if row.airtable_record_id
     }
 
-    sorted_matches = sorted(matches, key=lambda m: m.get("rank", 999))
     linked_record_ids = []
-    for m in sorted_matches:
-        at_id = norm_to_airtable.get(m["candidate_id"])
+    for row in match_rows:
+        at_id = norm_to_airtable.get(str(row.candidate_id))
         if at_id:
             linked_record_ids.append(at_id)
 
-    if not linked_record_ids:
-        context.log.warning(
-            f"No Airtable record IDs found for matched candidates on job {record_id}"
-        )
+    context.log.info(
+        f"Mapped {len(linked_record_ids)}/{len(match_rows)} candidates to Airtable record IDs"
+    )
 
     ats = context.resources.airtable_ats
     fields: dict[str, Any] = {ATS_JOB_STATUS_FIELD: ATS_MATCHMAKING_DONE_STATUS}
