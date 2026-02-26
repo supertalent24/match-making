@@ -341,6 +341,9 @@ SENIORITY_PENALTY_PER_YEAR = 2  # soft penalty points per year short (overall)
 SENIORITY_PENALTY_PER_SKILL_YEAR = 1  # points per skill when candidate years < job min_years
 SENIORITY_PENALTY_CAP = 10  # cap overall years penalty
 SENIORITY_MAX_DEDUCTION = 0.2  # cap deduction from combined (penalty_points/100, max 20%)
+SEMANTIC_PARTIAL_CREDIT_CAP = (
+    0.5  # max effective rating for a near-miss skill via embedding similarity
+)
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -433,6 +436,8 @@ def _location_score(
 def _skill_coverage_score(
     req_skills: list[dict[str, Any]],
     cand_skills_map: dict[str, tuple[float, int | None]],
+    job_skill_vecs: dict[str, list[float]] | None = None,
+    cand_skill_vecs: dict[str, list[float]] | None = None,
 ) -> float:
     """0-1: how well candidate skills cover job required skills (name + proficiency).
 
@@ -442,11 +447,21 @@ def _skill_coverage_score(
     When a job specifies min_level for a skill, candidates below that threshold
     receive a proportional penalty (rating / required_level). Candidates at or
     above the threshold get full credit.
+
+    When a required skill has no exact canonical match in the candidate's profile
+    but both job and candidate skill vectors are available, the most similar
+    candidate skill vector is found and partial credit is granted, capped by
+    SEMANTIC_PARTIAL_CREDIT_CAP.
     """
     if not req_skills:
         return 1.0
     total_weight = 0.0
     scored = 0.0
+
+    cand_vec_keys = (
+        [k for k in cand_skill_vecs if k.startswith("skill_")] if cand_skill_vecs else []
+    )
+
     for s in req_skills:
         name = (s.get("skill_name") or "").strip()
         if not name:
@@ -455,6 +470,14 @@ def _skill_coverage_score(
         w = 3.0 if req_type == "must_have" else 1.0
         total_weight += w
         rating, _years = cand_skills_map.get(name, (0.0, None))
+
+        if rating == 0.0 and job_skill_vecs and cand_skill_vecs and cand_vec_keys:
+            job_vec = job_skill_vecs.get(skill_vector_key(name))
+            if job_vec:
+                max_sim = max(
+                    _cosine_similarity(job_vec, cand_skill_vecs[k]) for k in cand_vec_keys
+                )
+                rating = max_sim * SEMANTIC_PARTIAL_CREDIT_CAP
 
         level_factor = 1.0
         min_level = s.get("min_level")
@@ -539,7 +562,7 @@ def _seniority_penalty_and_experience_score(
     },
     description="Computed matches between jobs and candidates with scores (one partition per job)",
     group_name="matching",
-    code_version="2.2.0",  # skill semantic: job skill_* vs cand skill_* when both exist
+    code_version="2.3.0",  # semantic partial credit for near-miss skills in coverage scoring
     io_manager_key="postgres_io",
     required_resource_keys={"matchmaking"},
     metadata={
@@ -749,7 +772,9 @@ def matches(
             missing_nice = [s for s in nice_to_have if s not in candidate_skill_names]
             matching = [s for s in must_have + nice_to_have if s in candidate_skill_names]
 
-            skill_coverage = _skill_coverage_score(req_skills, cand_skills_map_for_cand)
+            skill_coverage = _skill_coverage_score(
+                req_skills, cand_skills_map_for_cand, jvecs, cvecs
+            )
             skill_semantic = _skill_semantic_score(
                 job_role_vec, cvecs, req_skills=req_skills, job_skill_vecs=jvecs
             )
