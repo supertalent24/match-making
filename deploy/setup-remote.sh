@@ -48,6 +48,9 @@ fi
 export PATH="/root/.local/bin:$PATH"
 
 poetry config virtualenvs.in-project true
+
+# Remove any cached venv so poetry creates a fresh in-project .venv
+poetry env remove --all 2>/dev/null || true
 poetry env use python3.13
 
 # ── 2. Python dependencies ──────────────────────────────────────────────────
@@ -55,6 +58,8 @@ poetry env use python3.13
 echo "[2/6] Installing Python dependencies..."
 
 poetry install --with llm,parsing --no-interaction
+
+echo "       venv: $(poetry env info -p)"
 
 # ── 3. Environment file ─────────────────────────────────────────────────────
 
