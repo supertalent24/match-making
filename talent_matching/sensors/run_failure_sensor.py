@@ -41,6 +41,10 @@ KNOWN_FAILURES: list[tuple[str, list[str]]] = [
         "RATE_LIMIT",
         ["429", "Too Many Requests", "rate limit"],
     ),
+    (
+        "CONCURRENCY_SLOTS_ERROR",
+        ["concurrency_limits", "concurrency_slots", "NotNullViolation"],
+    ),
 ]
 
 
@@ -65,11 +69,9 @@ def run_failure_tagger(context: dg.RunFailureSensorContext):
     run_id = context.dagster_run.run_id
     job_name = context.dagster_run.job_name
 
-    step_failure_events = context.get_step_failure_events()
-
     all_tags: set[str] = set()
 
-    for event in step_failure_events:
+    for event in context.get_step_failure_events():
         failure_data = event.step_failure_data
         if failure_data is None:
             continue
@@ -77,9 +79,12 @@ def run_failure_tagger(context: dg.RunFailureSensorContext):
         if error is None:
             continue
 
-        error_str = error.to_string()
-        matched = _classify_failure(error_str)
-        all_tags.update(matched)
+        all_tags.update(_classify_failure(error.to_string()))
+
+    if not all_tags:
+        pipeline_error = context.failure_event.pipeline_failure_data.error
+        if pipeline_error is not None:
+            all_tags.update(_classify_failure(pipeline_error.to_string()))
 
     if not all_tags:
         all_tags.add("UNKNOWN_FAILURE")
