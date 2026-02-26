@@ -78,8 +78,9 @@ ssh -N -f \
     -L "$LOCAL_PG_PORT:localhost:$REMOTE_PG_PORT" \
     -L "$LOCAL_GRPC_PORT:localhost:4266" \
     -o ExitOnForwardFailure=yes \
-    -o ServerAliveInterval=30 \
+    -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=3 \
+    -o TCPKeepAlive=yes \
     "$REMOTE_HOST"
 
 TUNNEL_PID=$(pgrep -f "ssh -N -f.*$REMOTE_HOST" | tail -1)

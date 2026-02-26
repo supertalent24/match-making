@@ -29,8 +29,13 @@ run_storage:
         env: POSTGRES_PASSWORD
       db_name:
         env: POSTGRES_DB
+      params:
+        keepalives: 1
+        keepalives_idle: 30
+        keepalives_interval: 10
+        keepalives_count: 5
+        connect_timeout: 10
 
-# Use PostgreSQL for event log storage
 event_log_storage:
   module: dagster_postgres.event_log
   class: PostgresEventLogStorage
@@ -46,8 +51,13 @@ event_log_storage:
         env: POSTGRES_PASSWORD
       db_name:
         env: POSTGRES_DB
+      params:
+        keepalives: 1
+        keepalives_idle: 30
+        keepalives_interval: 10
+        keepalives_count: 5
+        connect_timeout: 10
 
-# Use PostgreSQL for schedule storage
 schedule_storage:
   module: dagster_postgres.schedule_storage
   class: PostgresScheduleStorage
@@ -63,6 +73,12 @@ schedule_storage:
         env: POSTGRES_PASSWORD
       db_name:
         env: POSTGRES_DB
+      params:
+        keepalives: 1
+        keepalives_idle: 30
+        keepalives_interval: 10
+        keepalives_count: 5
+        connect_timeout: 10
 
 run_launcher:
   module: dagster._core.launcher
