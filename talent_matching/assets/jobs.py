@@ -971,7 +971,7 @@ ATS_MATCHMAKING_DONE_STATUS = "Matchmaking Done "  # trailing space matches Airt
     description="Upload top match results to ATS table as linked candidate chips and set Job Status to Matchmaking Done",
     group_name="matching",
     required_resource_keys={"airtable_ats"},
-    code_version="1.2.0",
+    code_version="1.3.0",
 )
 def upload_matches_to_ats(
     context: AssetExecutionContext,
@@ -981,14 +981,27 @@ def upload_matches_to_ats(
     from talent_matching.models.candidates import NormalizedCandidate
 
     record_id = context.partition_key
+    ats = context.resources.airtable_ats
     context.log.info(f"Uploading {len(matches)} matches to ATS for job {record_id}")
 
-    if not matches:
-        context.log.warning(
-            f"No matches for {record_id} — setting status to Matchmaking Done anyway"
+    current_record = ats.fetch_record_by_id(record_id)
+    current_status = current_record.get("fields", {}).get(ATS_JOB_STATUS_FIELD)
+    should_flip_status = current_status == "Matchmaking Ready"
+
+    if not should_flip_status:
+        context.log.info(
+            f"Job Status is '{current_status}', not 'Matchmaking Ready' "
+            f"— will upload matches but skip status change"
         )
-        ats = context.resources.airtable_ats
-        ats.update_record(record_id, {ATS_JOB_STATUS_FIELD: ATS_MATCHMAKING_DONE_STATUS})
+
+    if not matches:
+        if should_flip_status:
+            context.log.warning(
+                f"No matches for {record_id} — setting status to Matchmaking Done anyway"
+            )
+            ats.update_record(record_id, {ATS_JOB_STATUS_FIELD: ATS_MATCHMAKING_DONE_STATUS})
+        else:
+            context.log.warning(f"No matches for {record_id} and status not flippable — skipping")
         return
 
     candidate_norm_ids = [m["candidate_id"] for m in matches]
@@ -1016,14 +1029,21 @@ def upload_matches_to_ats(
         f"Mapped {len(linked_record_ids)}/{len(matches)} candidates to Airtable record IDs"
     )
 
-    ats = context.resources.airtable_ats
-    fields: dict[str, Any] = {ATS_JOB_STATUS_FIELD: ATS_MATCHMAKING_DONE_STATUS}
+    fields: dict[str, Any] = {}
+    if should_flip_status:
+        fields[ATS_JOB_STATUS_FIELD] = ATS_MATCHMAKING_DONE_STATUS
     if linked_record_ids:
         fields[ATS_AI_PROPOSED_FIELD] = linked_record_ids
 
-    ats.update_record(record_id, fields)
+    if fields:
+        ats.update_record(record_id, fields)
 
+    status_msg = (
+        f"set Job Status to '{ATS_MATCHMAKING_DONE_STATUS}'"
+        if should_flip_status
+        else "Job Status unchanged"
+    )
     context.log.info(
         f"Uploaded {len(linked_record_ids)} candidate chips to '{ATS_AI_PROPOSED_FIELD}' "
-        f"and set Job Status to '{ATS_MATCHMAKING_DONE_STATUS}' for {record_id}"
+        f"({status_msg}) for {record_id}"
     )
