@@ -463,7 +463,7 @@ def _skill_coverage_score(
             if rating < min_level_norm:
                 level_factor = rating / min_level_norm
 
-        scored += (rating / 10.0) * w * level_factor
+        scored += rating * w * level_factor
     if total_weight == 0:
         return 1.0
     return min(1.0, scored / total_weight)
