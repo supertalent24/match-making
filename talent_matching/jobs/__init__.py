@@ -171,26 +171,13 @@ matchmaking_job = define_asset_job(
 upload_normalized_jobs_to_airtable_job = define_asset_job(
     name="upload_normalized_jobs_to_airtable",
     description=(
-        "Upload normalized job data to Airtable (N)-prefixed columns + set Start Matchmaking=false. "
+        "Upload normalized job data to Airtable (N)-prefixed columns. "
         "Uses already-materialized normalized_jobs; does not re-run normalization. "
         "Use Backfill to select which job partitions to sync."
     ),
     selection=[airtable_job_sync],
     partitions_def=job_partitions,
 )
-
-matchmaking_with_feedback_job = define_asset_job(
-    name="matchmaking_with_feedback",
-    description=(
-        "Re-generate job vectors and compute matches after human-edited (N) fields "
-        "have been synced from Airtable to DB. Triggered by the airtable_job_matchmaking_sensor."
-    ),
-    selection=[job_vectors, matches],
-    partitions_def=job_partitions,
-    op_retry_policy=openrouter_retry_policy,
-    tags={"dagster/concurrency_limit": "matchmaking"},
-)
-
 
 # =============================================================================
 # OPS JOBS (for operational tasks)
@@ -626,7 +613,6 @@ __all__ = [
     "job_ingest_job",
     "matchmaking_job",
     "upload_normalized_jobs_to_airtable_job",
-    "matchmaking_with_feedback_job",
     "sync_airtable_candidates_job",
     "sync_airtable_jobs_job",
     "sample_candidates_job",

@@ -290,7 +290,7 @@ def job_vectors(
 @asset(
     partitions_def=job_partitions,
     ins={"normalized_jobs": AssetIn()},
-    description="Write all normalized job (N)-prefixed fields back to the Airtable row + set Start Matchmaking checkbox to false",
+    description="Write all normalized job (N)-prefixed fields back to the Airtable row",
     group_name="jobs",
     required_resource_keys={"airtable_jobs", "matchmaking"},
     op_tags={"dagster/concurrency_key": "airtable_api"},
@@ -301,7 +301,6 @@ def airtable_job_sync(
 ) -> dict[str, Any]:
     """Write all normalized job fields back to the Airtable row under (N)-prefixed columns.
 
-    Also sets the 'Start Matchmaking' checkbox to False (initial state, awaiting human review).
     Loads full NormalizedJob from Postgres by airtable_record_id and PATCHes the record.
     """
     record_id = context.partition_key
@@ -312,7 +311,6 @@ def airtable_job_sync(
         return {"airtable_record_id": record_id, "synced": False, "skipped": True, "fields": {}}
 
     fields = normalized_job_to_airtable_fields(job)
-    fields["Start Matchmaking"] = False
 
     if not fields:
         context.log.info(f"No fields to sync for job {record_id}")
@@ -320,7 +318,7 @@ def airtable_job_sync(
 
     airtable = context.resources.airtable_jobs
     airtable.update_record(record_id, fields)
-    context.log.info(f"Synced {record_id}: {len(fields)} (N) columns + Start Matchmaking=false")
+    context.log.info(f"Synced {record_id}: {len(fields)} (N) columns")
     return {"airtable_record_id": record_id, "synced": True, "fields": fields}
 
 

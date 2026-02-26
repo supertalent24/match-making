@@ -1,9 +1,7 @@
-"""Airtable sensors for detecting changes in candidate and job records.
+"""Airtable sensors for detecting changes in candidate records.
 
 Sensors:
 - airtable_candidate_sensor: Cursor-based incremental sync for candidates.
-- airtable_job_matchmaking_sensor: Polls for 'Start Matchmaking' checkbox on jobs,
-  syncs human-edited (N) fields to DB, then triggers matchmaking.
 """
 
 import json
@@ -17,9 +15,7 @@ from dagster import (
 )
 
 from talent_matching.assets.candidates import candidate_partitions
-from talent_matching.assets.jobs import job_partitions
-from talent_matching.jobs import candidate_pipeline_job, matchmaking_with_feedback_job
-from talent_matching.utils.airtable_mapper import airtable_normalized_job_fields_to_db
+from talent_matching.jobs import candidate_pipeline_job
 
 
 @sensor(
@@ -157,68 +153,3 @@ def airtable_candidate_sensor(context: SensorEvaluationContext):
                 run_key=f"candidate-update-{record_id}-{current_sync_time}",
                 partition_key=record_id,
             )
-
-
-@sensor(
-    job=matchmaking_with_feedback_job,
-    minimum_interval_seconds=300,
-    description=(
-        "Polls Airtable jobs table for records with 'Start Matchmaking' checked. "
-        "Reads human-edited (N) fields, syncs to DB, unchecks the flag, and triggers matchmaking."
-    ),
-    required_resource_keys={"airtable_jobs", "matchmaking"},
-)
-def airtable_job_matchmaking_sensor(context: SensorEvaluationContext):
-    """Detect jobs with 'Start Matchmaking' checked, sync feedback, and trigger matchmaking.
-
-    For each flagged job:
-    1. Read all (N) fields from the Airtable record
-    2. Convert to DB column names and update normalized_jobs in Postgres
-    3. Uncheck 'Start Matchmaking' to prevent re-triggering
-    4. Yield RunRequest for matchmaking_with_feedback_job (re-generates vectors + matches)
-    """
-    airtable_jobs = context.resources.airtable_jobs
-    matchmaking = context.resources.matchmaking
-
-    records = airtable_jobs.fetch_records_with_start_matchmaking()
-    if not records:
-        return SkipReason("No jobs with 'Start Matchmaking' checked")
-
-    context.log.info(f"Found {len(records)} jobs with Start Matchmaking checked")
-
-    existing_partitions = set(
-        context.instance.get_dynamic_partitions(partitions_def_name=job_partitions.name)
-    )
-
-    now_iso = datetime.now(UTC).isoformat()
-
-    for record in records:
-        record_id = record.get("id")
-        if not record_id:
-            continue
-
-        if record_id not in existing_partitions:
-            context.log.warning(
-                f"Job {record_id} has Start Matchmaking checked but is not a known partition; skipping"
-            )
-            continue
-
-        raw_fields = record.get("fields", {})
-        db_fields = airtable_normalized_job_fields_to_db(raw_fields)
-
-        if db_fields:
-            updated = matchmaking.update_normalized_job_from_airtable(record_id, db_fields)
-            if updated:
-                context.log.info(
-                    f"Synced {len(db_fields)} (N) fields from Airtable to DB for {record_id}"
-                )
-            else:
-                context.log.warning(f"No normalized_jobs row for {record_id}; skipping DB sync")
-
-        airtable_jobs.update_record(record_id, {"Start Matchmaking": False})
-        context.log.info(f"Unchecked Start Matchmaking for {record_id}")
-
-        yield RunRequest(
-            run_key=f"matchmaking-feedback-{record_id}-{now_iso}",
-            partition_key=record_id,
-        )

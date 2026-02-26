@@ -1,7 +1,6 @@
-"""Create (N)-prefixed normalized job columns + Start Matchmaking checkbox in the Airtable jobs table.
+"""Create (N)-prefixed normalized job columns in the Airtable jobs table.
 
-Uses the Airtable Meta API to add the columns required for airtable_job_sync and
-the airtable_job_matchmaking_sensor feedback loop.
+Uses the Airtable Meta API to add the columns required for airtable_job_sync.
 
 Requires an Airtable Personal Access Token with schema read + write access to the base
 (create at https://airtable.com/create/tokens and add the schema scope for your base).

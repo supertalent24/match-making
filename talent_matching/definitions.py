@@ -28,7 +28,6 @@ from talent_matching.jobs import (
     job_ingest_job,
     job_pipeline_job,
     matchmaking_job,
-    matchmaking_with_feedback_job,
     sample_candidates_job,
     skill_normalization_job,
     skill_normalization_schedule,
@@ -50,7 +49,6 @@ from talent_matching.resources import (
 )
 from talent_matching.sensors.airtable_sensor import (
     airtable_candidate_sensor,
-    airtable_job_matchmaking_sensor,
 )
 from talent_matching.sensors.ats_matchmaking_sensor import ats_matchmaking_sensor
 from talent_matching.sensors.run_failure_sensor import run_failure_tagger
@@ -144,7 +142,6 @@ all_jobs = [
     job_ingest_job,
     matchmaking_job,
     upload_normalized_jobs_to_airtable_job,
-    matchmaking_with_feedback_job,
     # Ops jobs (non-partitioned)
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
@@ -162,7 +159,6 @@ all_schedules = [
 # All sensors
 all_sensors = [
     airtable_candidate_sensor,
-    airtable_job_matchmaking_sensor,
     ats_matchmaking_sensor,
     run_failure_tagger,
 ]
