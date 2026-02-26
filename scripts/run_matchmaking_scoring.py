@@ -45,6 +45,7 @@ SENIORITY_PENALTY_PER_YEAR = 2
 SENIORITY_PENALTY_PER_SKILL_YEAR = 1
 SENIORITY_PENALTY_CAP = 10
 SENIORITY_MAX_DEDUCTION = 0.2
+SEMANTIC_PARTIAL_CREDIT_CAP = 0.5
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -117,19 +118,49 @@ def _location_score(
     return max(0.0, 1.0 - diff / 12.0) * weight
 
 
-def _skill_coverage_score(req_skills: list, cand_skills_map: dict) -> float:
-    """Must-have weight 3x nice-to-have; missing skill contributes 0 (no flat penalty)."""
+def _skill_coverage_score(
+    req_skills: list,
+    cand_skills_map: dict,
+    job_skill_vecs: dict | None = None,
+    cand_skill_vecs: dict | None = None,
+) -> float:
+    """Must-have weight 3x nice-to-have; missing skill contributes 0 (no flat penalty).
+
+    Semantic partial credit: when a required skill has no exact canonical match,
+    the most similar candidate skill vector is found and partial credit is granted.
+    """
     if not req_skills:
         return 1.0
     total_weight = scored = 0.0
+
+    cand_vec_keys = (
+        [k for k in cand_skill_vecs if k.startswith("skill_")] if cand_skill_vecs else []
+    )
+
     for s in req_skills:
         name = (s.get("skill_name") or "").strip()
         if not name:
             continue
         w = 3.0 if (s.get("requirement_type") or "must_have") == "must_have" else 1.0
         total_weight += w
-        rating = cand_skills_map.get(name, (0.0, None))[0]
-        scored += (rating / 10.0) * w
+        rating, _years = cand_skills_map.get(name, (0.0, None))
+
+        if rating == 0.0 and job_skill_vecs and cand_skill_vecs and cand_vec_keys:
+            job_vec = job_skill_vecs.get(_skill_key_from_name(name))
+            if job_vec:
+                max_sim = max(
+                    _cosine_similarity(job_vec, cand_skill_vecs[k]) for k in cand_vec_keys
+                )
+                rating = max_sim * SEMANTIC_PARTIAL_CREDIT_CAP
+
+        level_factor = 1.0
+        min_level = s.get("min_level")
+        if min_level is not None and rating > 0:
+            min_level_norm = min_level / 10.0
+            if rating < min_level_norm:
+                level_factor = rating / min_level_norm
+
+        scored += rating * w * level_factor
     return min(1.0, scored / total_weight) if total_weight else 1.0
 
 
@@ -376,7 +407,9 @@ def run_scoring(
             missing_nice = [s for s in nice_to_have if s not in candidate_skill_names]
             matching = [s for s in must_have + nice_to_have if s in candidate_skill_names]
 
-            skill_coverage = _skill_coverage_score(req_skills, cand_skills_map_for_cand)
+            skill_coverage = _skill_coverage_score(
+                req_skills, cand_skills_map_for_cand, jvecs, cvecs
+            )
             skill_semantic = _skill_semantic_score(
                 job_role_vec, cvecs, req_skills=req_skills, job_skill_vecs=jvecs
             )
