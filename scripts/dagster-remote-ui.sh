@@ -15,7 +15,7 @@
 #                                       └──────────────────────────┘
 #
 # Prerequisites:
-#   - dagster & dagster-webserver installed locally (pip install -e .)
+#   - poetry install (deps are managed via pyproject.toml / poetry.lock)
 #   - Remote stack running (docker compose -f docker-compose.prod.yml up -d)
 #   - SSH access to the remote server
 #   - .env file in the project root with DB credentials matching the remote
@@ -82,7 +82,8 @@ export POSTGRES_HOST=localhost
 export POSTGRES_PORT="$LOCAL_PG_PORT"
 export DAGSTER_HOME="$PROJECT_ROOT"
 
-dagster-webserver \
+cd "$PROJECT_ROOT"
+poetry run dagster-webserver \
     -h 0.0.0.0 \
     -p "$LOCAL_WEB_PORT" \
     -w "$WORKSPACE_FILE"

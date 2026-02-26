@@ -1,23 +1,26 @@
 # Stage 1: Install Python dependencies
-FROM python:3.11-slim AS builder
+FROM python:3.13-slim AS builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
+RUN pip install --no-cache-dir poetry && \
+    poetry config virtualenvs.create false
+
 WORKDIR /build
 
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir --prefix=/install .
+COPY pyproject.toml poetry.lock ./
+RUN poetry install --only main --no-root --no-interaction
 
 # Stage 2: Runtime image
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libpq5 && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /install /usr/local
+COPY --from=builder /usr/local /usr/local
 
 WORKDIR /opt/dagster/app
 

@@ -1,67 +1,62 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
+[tool.poetry]
 name = "talent-matching"
 version = "0.1.0"
 description = "Talent Evaluation & Matchmaking System using Dagster"
 readme = "README.md"
-requires-python = ">=3.11"
-license = {text = "MIT"}
-authors = [
-    {name = "Superteam Talent"}
-]
+license = "MIT"
+authors = ["Superteam Talent"]
+packages = [{include = "talent_matching"}]
 
-dependencies = [
-    # Dagster core
-    "dagster>=1.6.0",
-    "dagster-webserver>=1.6.0",
-    "dagster-postgres>=0.22.0",
-
-    # Database
-    "psycopg2-binary>=2.9.9",
-    "pgvector>=0.2.4",
-    "sqlalchemy>=2.0.0",
-    "alembic>=1.13.0",
-
-    # HTTP client (for social API integrations)
-    "httpx>=0.26.0",
-
-    # Utilities
-    "python-dotenv>=1.0.0",
-    "pydantic>=2.0.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
-    "ruff>=0.1.0",
-    "mypy>=1.7.0",
-    "pre-commit>=3.6.0",
-]
-
-# Future LLM integrations (not installed by default)
-llm = [
-    "openai>=1.0.0",
-    "anthropic>=0.18.0",
-    "tiktoken>=0.5.0",
-]
-
-# CV parsing (PDF extraction)
-parsing = [
-    "pymupdf>=1.24.0",  # PDF to image conversion for vision model OCR
-    "pypdf>=3.17.0",
-    "python-docx>=1.1.0",
-]
-
-[project.scripts]
+[tool.poetry.scripts]
 talent-matching = "talent_matching.definitions:main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["talent_matching*"]
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Dagster core
+dagster = ">=1.6.0"
+dagster-webserver = ">=1.6.0"
+dagster-postgres = ">=0.22.0"
+
+# Database
+psycopg2-binary = ">=2.9.9"
+pgvector = ">=0.2.4"
+sqlalchemy = ">=2.0.0"
+alembic = ">=1.13.0"
+
+# HTTP client (for social API integrations)
+httpx = ">=0.26.0"
+
+# Utilities
+python-dotenv = ">=1.0.0"
+pydantic = ">=2.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.4.0"
+pytest-cov = ">=4.1.0"
+ruff = ">=0.1.0"
+mypy = ">=1.7.0"
+pre-commit = ">=3.6.0"
+
+[tool.poetry.group.llm]
+optional = true
+
+[tool.poetry.group.llm.dependencies]
+openai = ">=1.0.0"
+anthropic = ">=0.18.0"
+tiktoken = ">=0.5.0"
+
+[tool.poetry.group.parsing]
+optional = true
+
+[tool.poetry.group.parsing.dependencies]
+pymupdf = ">=1.24.0"
+pypdf = ">=3.17.0"
+python-docx = ">=1.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
 [tool.dagster]
 module_name = "talent_matching.definitions"
