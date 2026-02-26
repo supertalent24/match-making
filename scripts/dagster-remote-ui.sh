@@ -21,16 +21,28 @@
 #   - .env file in the project root with DB credentials matching the remote
 #
 # Usage:
-#   ./scripts/dagster-remote-ui.sh <ssh_user@remote_host>
-#
-# Example:
-#   ./scripts/dagster-remote-ui.sh deploy@192.168.1.100
+#   poetry remote-ui                          # uses REMOTE_HOST from .env
+#   ./scripts/dagster-remote-ui.sh            # uses REMOTE_HOST from .env
+#   ./scripts/dagster-remote-ui.sh user@host  # override
 
 set -euo pipefail
 
-REMOTE_HOST="${1:?Usage: $0 <ssh_user@remote_host>}"
-
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    source "$PROJECT_ROOT/.env"
+    set +a
+fi
+
+REMOTE_HOST="${1:-${REMOTE_HOST:-}}"
+if [ -z "$REMOTE_HOST" ]; then
+    echo "Error: No remote host specified."
+    echo "Set REMOTE_HOST in .env or pass it as an argument."
+    echo "Usage: $0 [ssh_user@remote_host]"
+    exit 1
+fi
+
 WORKSPACE_FILE="$PROJECT_ROOT/docker/workspace-local.yaml"
 DAGSTER_YAML="$PROJECT_ROOT/dagster.yaml"
 

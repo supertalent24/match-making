@@ -9,6 +9,7 @@ packages = [{include = "talent_matching"}]
 
 [tool.poetry.scripts]
 talent-matching = "talent_matching.definitions:main"
+remote-ui = "talent_matching.cli:remote_ui"
 
 [tool.poetry.dependencies]
 python = "^3.11"
