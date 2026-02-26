@@ -2,3 +2,4 @@ load_from:
   - grpc_server:
       host: dagster-code
       port: 4266
+      location_name: talent_matching
