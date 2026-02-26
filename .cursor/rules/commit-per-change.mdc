@@ -10,3 +10,4 @@ After completing each distinct feature or fix, create a separate git commit imme
 - One commit per feature or fix — do not batch unrelated changes together.
 - Write a concise commit message that describes the "why", not just the "what".
 - If a task involves multiple independent features or fixes, commit each one as soon as it is complete before moving on to the next.
+- Always `git push` after each commit so the remote stays in sync.
