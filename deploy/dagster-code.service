@@ -1,0 +1,22 @@
+[Unit]
+Description=Dagster gRPC code server
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/match-making
+EnvironmentFile=/root/match-making/.env
+Environment=DAGSTER_HOME=/root/match-making
+Environment=POSTGRES_HOST=127.0.0.1
+Environment=ENVIRONMENT=production
+
+ExecStartPre=/root/.local/bin/poetry run alembic upgrade head
+ExecStart=/root/.local/bin/poetry run dagster api grpc -h 127.0.0.1 -p 4266 -m talent_matching.definitions
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

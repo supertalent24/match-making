@@ -16,7 +16,7 @@
 #
 # Prerequisites:
 #   - poetry install (deps are managed via pyproject.toml / poetry.lock)
-#   - Remote stack running (docker compose -f docker-compose.prod.yml up -d)
+#   - Remote server set up (bash deploy/setup-remote.sh)
 #   - SSH access to the remote server
 #   - .env file in the project root with DB credentials matching the remote
 #
