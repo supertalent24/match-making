@@ -94,6 +94,14 @@ export POSTGRES_HOST=localhost
 export POSTGRES_PORT="$LOCAL_PG_PORT"
 export DAGSTER_HOME="$PROJECT_ROOT"
 
+# Dagster's webserver loads .env from CWD with override=True, which
+# clobbers our POSTGRES_PORT. Hide the project .env so the webserver
+# uses the shell-exported values pointing at the SSH tunnel.
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    mv "$PROJECT_ROOT/.env" "$PROJECT_ROOT/.env.remote-bak"
+fi
+trap 'mv "$PROJECT_ROOT/.env.remote-bak" "$PROJECT_ROOT/.env" 2>/dev/null; cleanup' EXIT INT TERM
+
 cd "$PROJECT_ROOT"
 poetry run dagster-webserver \
     -h 0.0.0.0 \
