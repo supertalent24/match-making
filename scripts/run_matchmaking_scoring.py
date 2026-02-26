@@ -33,11 +33,11 @@ ROLE_WEIGHT = 0.4
 DOMAIN_WEIGHT = 0.35
 CULTURE_WEIGHT = 0.25
 TOP_N_PER_JOB = 20
-# Combined = 40% vector + 40% skill fit + 10% comp + 10% location − seniority deduction
-VECTOR_WEIGHT = 0.4
-SKILL_FIT_WEIGHT = 0.4
-COMPENSATION_WEIGHT = 0.1
-LOCATION_WEIGHT = 0.1
+# Combined = 35% vector + 35% skill fit + 10% comp + 20% location − seniority deduction
+VECTOR_WEIGHT = 0.35
+SKILL_FIT_WEIGHT = 0.35
+COMPENSATION_WEIGHT = 0.10
+LOCATION_WEIGHT = 0.20
 # When at least one skill matches: 80% rating-based coverage, 20% semantic (tie-breaker)
 SKILL_RATING_WEIGHT = 0.8
 SKILL_SEMANTIC_WEIGHT = 0.2
@@ -93,6 +93,8 @@ def _location_score(
 
     def parse_tz(s):
         stripped = str(s).strip()
+        if not stripped or stripped.lower() == "null":
+            return None
         upper = stripped.upper().replace(" ", "")
         if upper.startswith(("UTC", "GMT")):
             rest = upper[3:].strip()
@@ -107,6 +109,8 @@ def _location_score(
             num = rest.split("/")[0].split("-")[0].split("+")[0]
             if num.isdigit():
                 return sign * float(num)
+            return None
+        if "/" not in stripped:
             return None
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -123,12 +127,21 @@ def _location_score(
         parts = j_tz_str.split(" to ")
         j_lo = parse_tz(parts[0]) if parts else None
         j_hi = parse_tz(parts[1]) if len(parts) > 1 else None
-        j_center = (j_lo + j_hi) / 2 if j_lo is not None and j_hi is not None else (j_lo or j_hi)
     else:
-        j_center = parse_tz(j_tz_str)
-    if c_tz is None or j_center is None:
+        single = parse_tz(j_tz_str)
+        j_lo = single
+        j_hi = single
+    if c_tz is None or (j_lo is None and j_hi is None):
         return 0.5 * weight
-    diff = abs(c_tz - j_center)
+    if j_lo is None:
+        j_lo = j_hi
+    if j_hi is None:
+        j_hi = j_lo
+    if j_lo > j_hi:
+        j_lo, j_hi = j_hi, j_lo
+    if j_lo <= c_tz <= j_hi:
+        return 1.0 * weight
+    diff = min(abs(c_tz - j_lo), abs(c_tz - j_hi))
     return max(0.0, 1.0 - diff / 12.0) * weight
 
 

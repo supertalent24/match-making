@@ -123,7 +123,7 @@ def _is_notion_url(url: str) -> bool:
     group_name="jobs",
     io_manager_key="postgres_io",
     required_resource_keys={"openrouter"},
-    code_version="2.1.0",  # v2.1: pass recruiter non-negotiables & nice-to-haves to LLM
+    code_version="2.2.0",  # v2.2: pass location_raw to LLM for timezone inference
     metadata={
         "table": "normalized_jobs",
         "llm_operation": "normalize_job",
@@ -151,6 +151,7 @@ def normalized_jobs(
         }
     non_negotiables = (raw_jobs.get("non_negotiables") or "").strip() or None
     nice_to_have = (raw_jobs.get("nice_to_have") or "").strip() or None
+    location_raw = (raw_jobs.get("location_raw") or "").strip() or None
 
     openrouter = context.resources.openrouter
     result = asyncio.run(
@@ -159,6 +160,7 @@ def normalized_jobs(
             job_description,
             non_negotiables=non_negotiables,
             nice_to_have=nice_to_have,
+            location_raw=location_raw,
         )
     )
     data = result.data
@@ -329,11 +331,11 @@ CULTURE_WEIGHT = 0.25
 TOP_N_PER_JOB = 15
 ALGORITHM_VERSION = "notion_v2"
 
-# Combined score = weighted blend (40% vector, 40% skill fit, 10% comp, 10% location) − seniority deduction
-VECTOR_WEIGHT = 0.4
-SKILL_FIT_WEIGHT = 0.4
-COMPENSATION_WEIGHT = 0.1
-LOCATION_WEIGHT = 0.1
+# Combined score = weighted blend (35% vector, 35% skill fit, 10% comp, 20% location) − seniority deduction
+VECTOR_WEIGHT = 0.35
+SKILL_FIT_WEIGHT = 0.35
+COMPENSATION_WEIGHT = 0.10
+LOCATION_WEIGHT = 0.20
 # When at least one required skill matches: 80% from rating-based coverage, 20% semantic (tie-breaker)
 SKILL_RATING_WEIGHT = 0.8
 SKILL_SEMANTIC_WEIGHT = 0.2  # only applied when there is at least one matching skill
@@ -411,6 +413,8 @@ def _location_score(
         IANA timezone names ("America/New_York", "Asia/Kolkata").
         """
         stripped = s.strip()
+        if not stripped or stripped.lower() == "null":
+            return None
         upper = stripped.upper().replace(" ", "")
         if upper.startswith(("UTC", "GMT")):
             prefix_len = 3
@@ -427,6 +431,8 @@ def _location_score(
             if num.isdigit():
                 return sign * float(num)
             return None
+        if "/" not in stripped:
+            return None
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
@@ -442,12 +448,19 @@ def _location_score(
         parts = j_tz_str.split(" to ")
         j_lo = parse_tz(parts[0]) if parts else None
         j_hi = parse_tz(parts[1]) if len(parts) > 1 else None
-        j_center = (j_lo + j_hi) / 2 if j_lo is not None and j_hi is not None else j_lo or j_hi
     else:
-        j_center = parse_tz(j_tz_str)
-    if c_tz is None or j_center is None:
+        single = parse_tz(j_tz_str)
+        j_lo = single
+        j_hi = single
+    if c_tz is None or (j_lo is None and j_hi is None):
         return 0.5 * weight
-    diff = abs(c_tz - j_center)
+    lo: float = j_lo if j_lo is not None else (j_hi or 0.0)
+    hi: float = j_hi if j_hi is not None else (j_lo or 0.0)
+    if lo > hi:
+        lo, hi = hi, lo
+    if lo <= c_tz <= hi:
+        return 1.0 * weight
+    diff = min(abs(c_tz - lo), abs(c_tz - hi))
     overlap = max(0.0, 1.0 - diff / 12.0)
     return overlap * weight
 
@@ -581,7 +594,7 @@ def _seniority_penalty_and_experience_score(
     },
     description="Computed matches between jobs and candidates with scores (one partition per job)",
     group_name="matching",
-    code_version="2.3.0",  # semantic partial credit for near-miss skills in coverage scoring
+    code_version="2.4.0",  # increased location weight to 20%, rebalanced vector/skill to 35% each
     io_manager_key="postgres_io",
     required_resource_keys={"matchmaking"},
     metadata={
