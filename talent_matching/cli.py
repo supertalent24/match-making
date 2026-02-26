@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,3 +19,24 @@ def local_dev():
         [sys.executable, "-m", "dagster", "dev", "-m", "talent_matching.definitions"]
         + sys.argv[1:],
     )
+
+
+def deploy():
+    """Pull latest code, install deps, restart Dagster services."""
+    os.chdir(PROJECT_ROOT)
+
+    steps = [
+        ("Pulling latest code", ["git", "pull"]),
+        ("Installing dependencies", ["poetry", "install", "--no-interaction"]),
+        ("Running migrations", ["poetry", "run", "alembic", "upgrade", "head"]),
+        ("Restarting dagster-code", ["systemctl", "restart", "dagster-code"]),
+        ("Restarting dagster-daemon", ["systemctl", "restart", "dagster-daemon"]),
+    ]
+
+    for label, cmd in steps:
+        print(f"  {label}...")
+        subprocess.run(cmd, check=True)
+
+    print()
+    print("Deploy complete. Checking service status...")
+    subprocess.run(["systemctl", "status", "dagster-code", "dagster-daemon", "--no-pager"])
