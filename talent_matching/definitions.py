@@ -33,6 +33,8 @@ from talent_matching.jobs import (
     skill_normalization_schedule,
     sync_airtable_candidates_job,
     sync_airtable_jobs_job,
+    timezone_lookup_job,
+    timezone_lookup_schedule,
     upload_normalized_jobs_to_airtable_job,
     upload_normalized_to_airtable_job,
 )
@@ -147,6 +149,7 @@ all_jobs = [
     sync_airtable_jobs_job,
     sample_candidates_job,
     skill_normalization_job,
+    timezone_lookup_job,
     # ATS-driven pipeline (sensor-triggered)
     ats_matchmaking_pipeline_job,
 ]
@@ -154,6 +157,7 @@ all_jobs = [
 # Schedules
 all_schedules = [
     skill_normalization_schedule,
+    timezone_lookup_schedule,
 ]
 
 # All sensors
