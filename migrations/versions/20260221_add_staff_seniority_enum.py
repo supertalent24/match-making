@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TYPE seniority_enum ADD VALUE IF NOT EXISTS 'staff' AFTER 'senior'")
+    op.execute("ALTER TYPE seniority_enum ADD VALUE IF NOT EXISTS 'STAFF' AFTER 'SENIOR'")
 
 
 def downgrade() -> None:
