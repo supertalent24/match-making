@@ -1,0 +1,15 @@
+---
+description: Use Poetry for dependency management in this project
+alwaysApply: true
+---
+
+# Package Manager
+
+Use **Poetry** for all dependency management in this project.
+
+- Install packages: `poetry add <package>`
+- Install dev packages: `poetry add --group dev <package>`
+- Install optional group: `poetry add --group <group> <package>`
+- Update packages: `poetry update <package>`
+- Lock dependencies: `poetry lock`
+- Install from lock: `poetry install`

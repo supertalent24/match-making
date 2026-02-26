@@ -47,11 +47,11 @@ schedule_storage:
         env: POSTGRES_DB
 
 run_launcher:
-  module: dagster.core.launcher
+  module: dagster._core.launcher
   class: DefaultRunLauncher
 
 run_coordinator:
-  module: dagster.core.run_coordinator
+  module: dagster._core.run_coordinator
   class: QueuedRunCoordinator
   config:
     max_concurrent_runs: 20

@@ -65,10 +65,10 @@ schedule_storage:
         env: POSTGRES_DB
 
 run_launcher:
-  module: dagster.core.launcher
+  module: dagster._core.launcher
   class: DefaultRunLauncher
 
-# Queue runs so we can cap concurrency (dagster 1.6.x format)
+# Queue runs so we can cap concurrency
 #   Connection budget (PostgreSQL max_connections=300):
 #     Both app (talent_matching.db) and Dagster storage use NullPool — connections
 #     are transient but overlap across many concurrent subprocesses.
@@ -76,7 +76,7 @@ run_launcher:
 #     status updates, app DB ops). 20 runs × 8 = 160 peak, plus ~30 overhead = 190.
 #   Also bounded by 16 GB RAM: each run subprocess uses ~100-200 MB.
 run_coordinator:
-  module: dagster.core.run_coordinator
+  module: dagster._core.run_coordinator
   class: QueuedRunCoordinator
   config:
     max_concurrent_runs: 20
