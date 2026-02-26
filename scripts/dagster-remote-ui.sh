@@ -92,18 +92,17 @@ echo ""
 
 export POSTGRES_HOST=localhost
 export POSTGRES_PORT="$LOCAL_PG_PORT"
-export DAGSTER_HOME="$PROJECT_ROOT"
 
-# Dagster's webserver loads .env from CWD with override=True, which
-# clobbers our POSTGRES_PORT. Hide the project .env so the webserver
-# uses the shell-exported values pointing at the SSH tunnel.
-if [ -f "$PROJECT_ROOT/.env" ]; then
-    mv "$PROJECT_ROOT/.env" "$PROJECT_ROOT/.env.remote-bak"
-fi
-trap 'mv "$PROJECT_ROOT/.env.remote-bak" "$PROJECT_ROOT/.env" 2>/dev/null; cleanup' EXIT INT TERM
+# Dagster loads .env from CWD with override=True, which would clobber
+# POSTGRES_PORT. Run from a temp DAGSTER_HOME (with just dagster.yaml)
+# so the webserver uses the shell-exported values above.
+REMOTE_DAGSTER_HOME=$(mktemp -d)
+ln -sf "$DAGSTER_YAML" "$REMOTE_DAGSTER_HOME/dagster.yaml"
+export DAGSTER_HOME="$REMOTE_DAGSTER_HOME"
+trap 'rm -rf "$REMOTE_DAGSTER_HOME"; cleanup' EXIT INT TERM
 
-cd "$PROJECT_ROOT"
-poetry run dagster-webserver \
+cd "$REMOTE_DAGSTER_HOME"
+"$PROJECT_ROOT/.venv/bin/dagster-webserver" \
     -h 0.0.0.0 \
     -p "$LOCAL_WEB_PORT" \
     -w "$WORKSPACE_FILE"
