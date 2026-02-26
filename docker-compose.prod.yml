@@ -61,6 +61,8 @@ services:
     command:
       - dagster-daemon
       - run
+      - -w
+      - /opt/dagster/workspace.yaml
     env_file:
       - .env
     environment:
