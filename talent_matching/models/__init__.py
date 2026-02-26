@@ -29,6 +29,7 @@ from talent_matching.models.enums import (
 )
 from talent_matching.models.jobs import JobRequiredSkill, NormalizedJob
 from talent_matching.models.llm_costs import LLMCost
+from talent_matching.models.location_timezones import LocationTimezone
 from talent_matching.models.matches import Match
 from talent_matching.models.raw import RawCandidate, RawJob
 from talent_matching.models.skills import Skill, SkillAlias
@@ -76,6 +77,8 @@ __all__ = [
     # Vectors
     "CandidateVector",
     "JobVector",
+    # Location Timezones
+    "LocationTimezone",
     # LLM Costs
     "LLMCost",
 ]
