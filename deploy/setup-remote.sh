@@ -8,11 +8,10 @@
 #   bash deploy/setup-remote.sh
 #
 # What it does:
-#   1. Installs system dependencies (Python 3.13, poetry, Docker)
-#   2. Installs project Python dependencies via poetry
-#   3. Starts PostgreSQL via Docker Compose
-#   4. Restores DB dump if present
-#   5. Installs and starts systemd services for dagster-code and dagster-daemon
+#   1. Checks Docker is available
+#   2. Ensures .env file exists
+#   3. Restores DB dump if present
+#   4. Builds and starts the full stack via Docker Compose
 
 set -euo pipefail
 
@@ -24,53 +23,33 @@ echo "  Remote Server Setup"
 echo "============================================"
 echo ""
 
-# ── 1. System dependencies ──────────────────────────────────────────────────
+# ── 1. Check Docker ─────────────────────────────────────────────────────────
 
-echo "[1/6] Installing system dependencies..."
+echo "[1/4] Checking Docker..."
 
-apt-get update -qq
-apt-get install -y -qq software-properties-common > /dev/null
-
-if ! apt-cache show python3.13 &> /dev/null; then
-    echo "       Adding deadsnakes PPA for Python 3.13..."
-    add-apt-repository -y ppa:deadsnakes/ppa > /dev/null 2>&1
-    apt-get update -qq
+if ! command -v docker &> /dev/null; then
+    echo "  ERROR: Docker is not installed."
+    echo "  Install it: https://docs.docker.com/engine/install/ubuntu/"
+    exit 1
 fi
 
-apt-get install -y -qq python3.13 python3.13-venv python3.13-dev \
-    libpq-dev gcc curl > /dev/null
+docker compose version > /dev/null 2>&1 || {
+    echo "  ERROR: Docker Compose plugin not found."
+    exit 1
+}
 
-if ! command -v poetry &> /dev/null; then
-    echo "       Installing poetry..."
-    curl -sSL https://install.python-poetry.org | python3.13 -
-fi
+echo "       Docker is ready."
 
-export PATH="/root/.local/bin:$PATH"
+# ── 2. Environment file ─────────────────────────────────────────────────────
 
-poetry config virtualenvs.in-project true
-
-# Remove any cached venv so poetry creates a fresh in-project .venv
-poetry env remove --all 2>/dev/null || true
-poetry env use python3.13
-
-# ── 2. Python dependencies ──────────────────────────────────────────────────
-
-echo "[2/6] Installing Python dependencies..."
-
-poetry install --with llm,parsing --no-interaction
-
-echo "       venv: $(poetry env info -p)"
-
-# ── 3. Environment file ─────────────────────────────────────────────────────
-
-echo "[3/6] Checking .env file..."
+echo "[2/4] Checking .env file..."
 
 if [ ! -f .env ]; then
     cp env.example .env
     echo ""
     echo "  *** Created .env from env.example ***"
     echo "  *** Edit it now with your production values: ***"
-    echo "      nano /root/match-making/.env"
+    echo "      nano $PROJECT_DIR/.env"
     echo ""
     echo "  Then re-run this script."
     exit 1
@@ -78,9 +57,9 @@ fi
 
 source .env
 
-# ── 4. PostgreSQL ────────────────────────────────────────────────────────────
+# ── 3. Start PostgreSQL and restore dump ────────────────────────────────────
 
-echo "[4/6] Starting PostgreSQL..."
+echo "[3/4] Starting PostgreSQL..."
 
 docker compose -f docker-compose.prod.yml up -d postgres
 
@@ -90,47 +69,30 @@ until docker exec talent_matching_db pg_isready -U "${POSTGRES_USER:-talent}" -d
 done
 echo "       PostgreSQL is ready."
 
-# Restore DB dump if present
 if [ -f db_dump.sql.gz ]; then
     echo "       Restoring database from dump..."
     gunzip -c db_dump.sql.gz | docker exec -i talent_matching_db \
         psql -U "${POSTGRES_USER:-talent}" -d "${POSTGRES_DB:-talent_matching}"
     rm -f db_dump.sql.gz
     echo "       Database restored."
-else
-    echo "       Running migrations..."
-    poetry run alembic upgrade head
 fi
 
-# ── 5. Install systemd services ─────────────────────────────────────────────
+# ── 4. Build and start the full stack ────────────────────────────────────────
 
-echo "[5/6] Installing systemd services..."
+echo "[4/4] Building and starting Dagster stack..."
 
-cp deploy/dagster-code.service /etc/systemd/system/
-cp deploy/dagster-daemon.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable dagster-code dagster-daemon
-
-# ── 6. Start services ───────────────────────────────────────────────────────
-
-echo "[6/6] Starting Dagster services..."
-
-systemctl restart dagster-code
-sleep 3
-systemctl restart dagster-daemon
+docker compose -f docker-compose.prod.yml up --build -d
 
 echo ""
 echo "============================================"
 echo "  Setup complete!"
 echo "============================================"
 echo ""
-echo "  Services:"
-systemctl --no-pager status dagster-code dagster-daemon | grep -E "Active:|●"
+docker compose -f docker-compose.prod.yml ps
 echo ""
 echo "  Useful commands:"
-echo "    systemctl status dagster-code dagster-daemon"
-echo "    journalctl -u dagster-code -f"
-echo "    journalctl -u dagster-daemon -f"
+echo "    docker compose -f docker-compose.prod.yml logs -f"
+echo "    docker compose -f docker-compose.prod.yml ps"
 echo ""
 echo "  From your local machine:"
 echo "    poetry run remote-ui"

@@ -22,15 +22,15 @@ def local_dev():
 
 
 def deploy():
-    """Pull latest code, install deps, restart Dagster services."""
+    """Pull latest code, rebuild containers, restart the stack."""
     os.chdir(PROJECT_ROOT)
 
     steps = [
         ("Pulling latest code", ["git", "pull"]),
-        ("Installing dependencies", ["poetry", "install", "--no-interaction"]),
-        ("Running migrations", ["poetry", "run", "alembic", "upgrade", "head"]),
-        ("Restarting dagster-code", ["systemctl", "restart", "dagster-code"]),
-        ("Restarting dagster-daemon", ["systemctl", "restart", "dagster-daemon"]),
+        (
+            "Rebuilding and restarting stack",
+            ["docker", "compose", "-f", "docker-compose.prod.yml", "up", "--build", "-d"],
+        ),
     ]
 
     for label, cmd in steps:
@@ -39,4 +39,4 @@ def deploy():
 
     print()
     print("Deploy complete. Checking service status...")
-    subprocess.run(["systemctl", "status", "dagster-code", "dagster-daemon", "--no-pager"])
+    subprocess.run(["docker", "compose", "-f", "docker-compose.prod.yml", "ps"])

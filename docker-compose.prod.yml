@@ -18,6 +18,69 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - dagster_network
+
+  dagster-code:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dagster_code
+    entrypoint: ["/entrypoint.sh"]
+    command:
+      - dagster
+      - api
+      - grpc
+      - -h
+      - "0.0.0.0"
+      - -p
+      - "4266"
+      - -m
+      - talent_matching.definitions
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      ENVIRONMENT: production
+    volumes:
+      - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
+    ports:
+      - "127.0.0.1:4266:4266"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dagster_network
+
+  dagster-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dagster_daemon
+    command:
+      - dagster-daemon
+      - run
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      ENVIRONMENT: production
+    volumes:
+      - ./docker/dagster.yaml:${DAGSTER_HOME:-/opt/dagster/dagster_home}/dagster.yaml:ro
+      - ./docker/workspace.yaml:/opt/dagster/workspace.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dagster-code:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - dagster_network
 
 volumes:
   postgres_data:
+
+networks:
+  dagster_network:
+    driver: bridge
