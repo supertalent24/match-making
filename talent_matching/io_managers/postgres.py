@@ -39,6 +39,7 @@ from talent_matching.models.enums import (
 from talent_matching.models.jobs import JobRequiredSkill
 from talent_matching.services.timezone_resolver import resolve_candidate_timezone
 from talent_matching.skills.resolver import get_or_create_skill
+from talent_matching.utils.airtable_mapper import parse_comma_separated
 
 
 def _parse_employment_type(value: Any) -> EmploymentTypeEnum | None:
@@ -548,7 +549,10 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             "current_role": normalized_json.get("current_role"),
             "seniority_level": _parse_seniority(normalized_json.get("seniority_level")),
             "years_of_experience": normalized_json.get("years_of_experience"),
-            "desired_job_categories": None,  # From raw data, not LLM
+            "desired_job_categories": parse_comma_separated(
+                raw_candidate.desired_job_categories_raw
+            )
+            or None,
             "skills_summary": skills_list if skills_list else None,
             "companies_summary": companies if companies else None,
             "notable_achievements": notable_achievements if notable_achievements else None,

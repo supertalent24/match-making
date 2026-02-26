@@ -331,13 +331,14 @@ ROLE_WEIGHT = 0.4
 DOMAIN_WEIGHT = 0.35
 CULTURE_WEIGHT = 0.25
 TOP_N_PER_JOB = 15
-ALGORITHM_VERSION = "notion_v2"
+ALGORITHM_VERSION = "notion_v3"
+SKILL_MIN_THRESHOLD = 0.30
 
-# Combined score = weighted blend (35% vector, 35% skill fit, 10% comp, 20% location) − seniority deduction
+# Combined score = weighted blend (35% vector, 40% skill fit, 10% comp, 15% location) − seniority deduction
 VECTOR_WEIGHT = 0.35
-SKILL_FIT_WEIGHT = 0.35
+SKILL_FIT_WEIGHT = 0.40
 COMPENSATION_WEIGHT = 0.10
-LOCATION_WEIGHT = 0.20
+LOCATION_WEIGHT = 0.15
 # When at least one required skill matches: 80% from rating-based coverage, 20% semantic (tie-breaker)
 SKILL_RATING_WEIGHT = 0.8
 SKILL_SEMANTIC_WEIGHT = 0.2  # only applied when there is at least one matching skill
@@ -596,7 +597,7 @@ def _seniority_penalty_and_experience_score(
     },
     description="Computed matches between jobs and candidates with scores (one partition per job)",
     group_name="matching",
-    code_version="2.4.0",  # increased location weight to 20%, rebalanced vector/skill to 35% each
+    code_version="2.5.0",  # skill threshold, dedup, rebalanced skill 40% / location 15%
     io_manager_key="postgres_io",
     required_resource_keys={"matchmaking"},
     metadata={
@@ -847,6 +848,9 @@ def matches(
             cand_timezone = candidate.get("timezone")
             location_match_score = _location_score(cand_timezone, job_timezone, job_location_type)
 
+            if skill_fit_score < SKILL_MIN_THRESHOLD:
+                continue
+
             rows.append(
                 (
                     vector_score,
@@ -860,7 +864,11 @@ def matches(
                     location_match_score,
                     matching,
                     missing_must + missing_nice,
-                    {"candidate_id": str(cand_id_norm), "job_id": str(job_id_norm)},
+                    {
+                        "candidate_id": str(cand_id_norm),
+                        "job_id": str(job_id_norm),
+                        "full_name": candidate.get("full_name") or "",
+                    },
                 )
             )
 
@@ -920,6 +928,18 @@ def matches(
             )
 
         scored.sort(key=lambda t: t[0], reverse=True)
+
+        seen_names: set[str] = set()
+        deduped: list[tuple] = []
+        for entry in scored:
+            name = entry[-1].get("full_name", "").strip().lower()
+            if name and name in seen_names:
+                continue
+            if name:
+                seen_names.add(name)
+            deduped.append(entry)
+        scored = deduped
+
         for rank, (
             combined_01,
             role_sim,
