@@ -1052,20 +1052,28 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
         must_have = req.get("must_have_skills") or []
         nice_to_have = req.get("nice_to_have_skills") or []
 
-        def _skill_entry(entry: Any) -> tuple[str | None, str | None]:
-            """Normalize skill entry: dict -> (name, expected_capability); string -> (name, None)."""
+        def _skill_entry(
+            entry: Any,
+        ) -> tuple[str | None, str | None, int | None, int | None]:
+            """Normalize skill entry to (name, expected_capability, min_years, min_level)."""
             if isinstance(entry, dict):
                 name = (entry.get("name") or "").strip() or None
                 cap = entry.get("expected_capability")
                 cap = (cap.strip() if isinstance(cap, str) and cap.strip() else None) or None
-                return name, cap
+                min_years = entry.get("min_years")
+                min_years = int(min_years) if min_years is not None else None
+                min_level = entry.get("min_level")
+                min_level = int(min_level) if min_level is not None else None
+                if min_level is not None and not (1 <= min_level <= 10):
+                    min_level = None
+                return name, cap, min_years, min_level
             if isinstance(entry, str) and entry.strip():
-                return entry.strip(), None
-            return None, None
+                return entry.strip(), None, None, None
+            return None, None, None, None
 
         added_skill_ids: set[UUID] = set()
         for entry in must_have:
-            skill_name, expected_capability = _skill_entry(entry)
+            skill_name, expected_capability, min_years, min_level = _skill_entry(entry)
             if not skill_name:
                 continue
             skill_id = get_or_create_skill(session, skill_name, is_requirement=True)
@@ -1077,11 +1085,13 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
                         job_id=normalized_job.id,
                         skill_id=skill_id,
                         requirement_type=RequirementTypeEnum.MUST_HAVE,
+                        min_years=min_years,
+                        min_level=min_level,
                         expected_capability=expected_capability,
                     )
                 )
         for entry in nice_to_have:
-            skill_name, expected_capability = _skill_entry(entry)
+            skill_name, expected_capability, min_years, min_level = _skill_entry(entry)
             if not skill_name:
                 continue
             skill_id = get_or_create_skill(session, skill_name, is_requirement=True)
@@ -1093,6 +1103,8 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
                         job_id=normalized_job.id,
                         skill_id=skill_id,
                         requirement_type=RequirementTypeEnum.NICE_TO_HAVE,
+                        min_years=min_years,
+                        min_level=min_level,
                         expected_capability=expected_capability,
                     )
                 )

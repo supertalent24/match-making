@@ -8,6 +8,8 @@ Bump PROMPT_VERSION when changing the prompt to trigger asset staleness.
 import json
 from typing import TYPE_CHECKING, Any
 
+from talent_matching.models.enums import proficiency_scale_for_prompt
+
 if TYPE_CHECKING:
     from talent_matching.resources.openrouter import OpenRouterResource
 
@@ -16,12 +18,14 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = "5.0.0"  # v5.0.0: Fix seniority enum, add confidence_score/region, narrative alignment, drop is_current
+PROMPT_VERSION = (
+    "5.1.0"  # v5.1.0: Canonical per-level proficiency scale (aligned with job min_level)
+)
 
 # Default model for CV normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 
-SYSTEM_PROMPT = """You are a CV parser. Extract and normalize the following CV into this exact JSON structure:
+_SYSTEM_PROMPT_TEMPLATE = """You are a CV parser. Extract and normalize the following CV into this exact JSON structure:
 
 {
   "name": "Full name of the candidate",
@@ -138,11 +142,16 @@ IMPORTANT:
 - seniority_level must be uppercase: JUNIOR, MID, SENIOR, STAFF (IC track), LEAD (management track), PRINCIPAL, or EXECUTIVE
 - Be factual. If information is missing, use null. Do not make up information.
 
-SKILL PROFICIENCY RATING GUIDELINES:
-- 1-3 (Beginner): Mentioned skill, coursework, or basic exposure
-- 4-5 (Intermediate): Used in projects, 1-2 years experience
-- 6-7 (Advanced): Primary tech in job roles, 3+ years, significant projects
-- 8-9 (Expert): Tech lead/architect level, core contributor, 5+ years deep experience
+SKILL PROFICIENCY RATING GUIDELINES (use this exact scale: {proficiency_scale}):
+- 1 (Novice): Mentioned skill, no evidence of use
+- 2 (Beginner): Coursework, tutorials, or minimal exposure
+- 3 (Elementary): Basic exposure, used in a minor context
+- 4 (Developing): Used in projects, ~1-2 years experience
+- 5 (Competent): Solid working knowledge, ~2-3 years
+- 6 (Proficient): Primary tech in job roles, 3+ years, meaningful projects
+- 7 (Advanced): Strong practitioner, significant production experience
+- 8 (Expert): Tech lead/architect level, core contributor, 5+ years deep experience
+- 9 (Master): Industry-recognized depth, core infrastructure/protocol work
 - 10 (World-class): Published author, major OSS maintainer, recognized expert
 - Base ratings on EVIDENCE in the CV, not assumptions. Be conservative if evidence is limited.
 
@@ -210,6 +219,10 @@ Technical narrative example:
 "Systems thinker who designs for scale and maintainability. Strong in distributed systems, particularly consensus mechanisms and eventual consistency patterns. Deep experience with Rust for performance-critical components and TypeScript for rapid iteration. Has built and operated production infrastructure handling millions of concurrent connections."
 
 Be specific and cite evidence from the CV. Each narrative should be 3-5 sentences of pure prose."""
+
+SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.replace(
+    "{proficiency_scale}", proficiency_scale_for_prompt()
+)
 
 
 class NormalizeCVResult:

@@ -438,6 +438,10 @@ def _skill_coverage_score(
 
     Must-have skills have 3x weight of nice-to-have. Missing skill contributes 0
     for that component (no separate flat penalty).
+
+    When a job specifies min_level for a skill, candidates below that threshold
+    receive a proportional penalty (rating / required_level). Candidates at or
+    above the threshold get full credit.
     """
     if not req_skills:
         return 1.0
@@ -451,7 +455,15 @@ def _skill_coverage_score(
         w = 3.0 if req_type == "must_have" else 1.0
         total_weight += w
         rating, _years = cand_skills_map.get(name, (0.0, None))
-        scored += (rating / 10.0) * w
+
+        level_factor = 1.0
+        min_level = s.get("min_level")
+        if min_level is not None and rating > 0:
+            min_level_norm = min_level / 10.0
+            if rating < min_level_norm:
+                level_factor = rating / min_level_norm
+
+        scored += (rating / 10.0) * w * level_factor
     if total_weight == 0:
         return 1.0
     return min(1.0, scored / total_weight)

@@ -8,6 +8,8 @@ Bump PROMPT_VERSION when changing the prompt to trigger asset staleness.
 import json
 from typing import TYPE_CHECKING, Any
 
+from talent_matching.models.enums import proficiency_scale_for_prompt
+
 if TYPE_CHECKING:
     from talent_matching.resources.openrouter import OpenRouterResource
 
@@ -16,12 +18,14 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = "2.5.0"  # v2.5.0: Incorporate recruiter non-negotiables & nice-to-haves
+PROMPT_VERSION = (
+    "3.0.0"  # v3.0.0: Add min_years and min_level per skill; canonical proficiency scale
+)
 
 # Default model for job normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 
-SYSTEM_PROMPT = """You are a job description parser. Extract and normalize this job posting into structured JSON. The output is used for semantic matching with candidate profiles: write job narratives and structured fields so they align with how candidates describe themselves (same vocabulary, same concepts).
+_SYSTEM_PROMPT_TEMPLATE = """You are a job description parser. Extract and normalize this job posting into structured JSON. The output is used for semantic matching with candidate profiles: write job narratives and structured fields so they align with how candidates describe themselves (same vocabulary, same concepts).
 
 Output a single JSON object with this structure (use null when not mentioned):
 
@@ -31,8 +35,8 @@ Output a single JSON object with this structure (use null when not mentioned):
   "seniority_level": "JUNIOR|MID|SENIOR|STAFF|LEAD|PRINCIPAL|EXECUTIVE",
   "employment_type": ["full-time", "part-time"] (array: list every type offered; infer from 'Vollzeit/Teilzeit', 'full or part time'; use ["full-time", "part-time"] when both offered)",
   "requirements": {
-    "must_have_skills": [{"name": "Canonical skill name", "expected_capability": "1-2 sentences: what the ideal candidate must be able to do with this skill in this role"}],
-    "nice_to_have_skills": [{"name": "Canonical skill name", "expected_capability": "1-2 sentences: what the ideal candidate should be able to do with this skill"}],
+    "must_have_skills": [{"name": "Canonical skill name", "min_years": "<number or null>", "min_level": "<1-10 proficiency or null>", "expected_capability": "1-2 sentences: what the ideal candidate must be able to do with this skill in this role"}],
+    "nice_to_have_skills": [{"name": "Canonical skill name", "min_years": "<number or null>", "min_level": "<1-10 proficiency or null>", "expected_capability": "1-2 sentences: what the ideal candidate should be able to do with this skill"}],
     "years_of_experience_min": <number or null>,
     "years_of_experience_max": <number or null>,
     "education_required": "Degree requirement or null",
@@ -82,13 +86,23 @@ Be factual. If information is not mentioned, use null.
 
 **Seniority:** Use the same levels as candidate profiles (uppercase): JUNIOR, MID, SENIOR, STAFF (IC track), LEAD (management track), PRINCIPAL, EXECUTIVE.
 
-**Skills:** Use canonical skill names so they match candidate skill lists: e.g. "React" not "ReactJS", "TypeScript" not "TS", "PostgreSQL" not "Postgres". For each required skill, output an object with "name" and "expected_capability". The expected_capability is 1-2 sentences inferring from the job description what the ideal candidate must be capable of with that skill (e.g. "Design and implement REST APIs; integrate with internal services"). Use the same vocabulary as candidate skill evidence for better semantic matching. Apply to must_have_skills and nice_to_have_skills. tech_stack remains a simple array of canonical names.
+**Skills:** Use canonical skill names so they match candidate skill lists: e.g. "React" not "ReactJS", "TypeScript" not "TS", "PostgreSQL" not "Postgres". For each required skill, output an object with "name", "min_years", "min_level", and "expected_capability".
+
+- **min_years** (int or null): minimum years of experience with this specific skill. Extract from phrases like "5+ years of React", "at least 3 years". Use null when no years requirement is stated or implied for this skill. Do NOT confuse overall years_of_experience_min with per-skill min_years.
+- **min_level** (int 1-10 or null): minimum proficiency level expected. Use the following scale (same as candidate ratings): {proficiency_scale}. Infer from context: "production experience" suggests 7-8 (Advanced/Expert), "deep expertise" or "architect-level" suggests 9+ (Master), "familiarity" or "exposure" suggests 3-4 (Elementary/Developing). Use null when proficiency level is not implied.
+- **expected_capability**: 1-2 sentences inferring from the job description what the ideal candidate must be capable of with that skill (e.g. "Design and implement REST APIs; integrate with internal services"). Use the same vocabulary as candidate skill evidence for better semantic matching.
+
+Apply to must_have_skills and nice_to_have_skills. tech_stack remains a simple array of canonical names.
 
 **Soft attribute requirements:** Infer minimum 1-5 scores from job description signals (e.g. "lead small team" -> leadership 3; "self-directed" -> autonomy 4). Use the same five dimensions as candidate profiles: leadership, autonomy, technical_depth, communication, growth_trajectory. Use null when not implied.
 
 **Compensation:** Always normalize to yearly amounts for salary_min and salary_max. If the posting states hourly, daily, or monthly rates, convert to yearly (e.g. hourly × 2080 for full-time, × 1040 for half-time; monthly × 12). Keep the stated currency. Use null only when no numeric compensation is given.
 
 **Job title:** Use English. If the posting is in another language (e.g. German "Frontend-Entwickler"), output the English equivalent (e.g. "Frontend Developer")."""
+
+SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.replace(
+    "{proficiency_scale}", proficiency_scale_for_prompt()
+)
 
 
 class NormalizeJobResult:

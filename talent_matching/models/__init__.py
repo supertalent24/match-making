@@ -13,6 +13,7 @@ from talent_matching.models.candidates import (
     NormalizedCandidate,
 )
 from talent_matching.models.enums import (
+    PROFICIENCY_LEVELS,
     CompanyStageEnum,
     CVExtractionMethodEnum,
     EmploymentTypeEnum,
@@ -24,6 +25,7 @@ from talent_matching.models.enums import (
     ReviewStatusEnum,
     SeniorityEnum,
     VerificationStatusEnum,
+    proficiency_scale_for_prompt,
 )
 from talent_matching.models.jobs import JobRequiredSkill, NormalizedJob
 from talent_matching.models.llm_costs import LLMCost
@@ -35,6 +37,9 @@ from talent_matching.models.vectors import CandidateVector, JobVector
 __all__ = [
     # Base
     "Base",
+    # Constants
+    "PROFICIENCY_LEVELS",
+    "proficiency_scale_for_prompt",
     # Enums
     "ProcessingStatusEnum",
     "CVExtractionMethodEnum",

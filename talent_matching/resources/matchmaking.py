@@ -48,6 +48,7 @@ class MatchmakingResource(ConfigurableResource):
                 Skill.name,
                 JobRequiredSkill.requirement_type,
                 JobRequiredSkill.min_years,
+                JobRequiredSkill.min_level,
                 JobRequiredSkill.expected_capability,
             )
             .join(Skill, JobRequiredSkill.skill_id == Skill.id)
@@ -59,7 +60,7 @@ class MatchmakingResource(ConfigurableResource):
 
         result: dict[str, list[dict[str, Any]]] = {jid: [] for jid in job_ids}
         for row in rows:
-            job_id, name, req_type, min_years, expected_capability = row
+            job_id, name, req_type, min_years, min_level, expected_capability = row
             jid_str = str(job_id)
             result.setdefault(jid_str, []).append(
                 {
@@ -70,6 +71,7 @@ class MatchmakingResource(ConfigurableResource):
                         else RequirementTypeEnum.MUST_HAVE.value
                     ),
                     "min_years": min_years,
+                    "min_level": min_level,
                     "expected_capability": expected_capability,
                 }
             )

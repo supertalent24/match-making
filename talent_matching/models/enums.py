@@ -100,3 +100,24 @@ class MatchStatusEnum(str, enum.Enum):
     CONTACTED = "contacted"
     REJECTED = "rejected"
     HIRED = "hired"
+
+
+# Canonical 1-10 proficiency scale shared across LLM prompts and scoring.
+# Candidate skill ratings and job min_level both use this scale.
+PROFICIENCY_LEVELS: dict[int, str] = {
+    1: "Novice",
+    2: "Beginner",
+    3: "Elementary",
+    4: "Developing",
+    5: "Competent",
+    6: "Proficient",
+    7: "Advanced",
+    8: "Expert",
+    9: "Master",
+    10: "World-class",
+}
+
+
+def proficiency_scale_for_prompt() -> str:
+    """Format the proficiency scale as a string suitable for inclusion in LLM prompts."""
+    return ", ".join(f"{k}={v}" for k, v in PROFICIENCY_LEVELS.items())

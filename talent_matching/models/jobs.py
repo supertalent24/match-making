@@ -220,6 +220,10 @@ class JobRequiredSkill(Base):
     __table_args__ = (
         UniqueConstraint("job_id", "skill_id", name="uq_job_skill"),
         CheckConstraint("min_years IS NULL OR min_years >= 0", name="ck_min_years_positive"),
+        CheckConstraint(
+            "min_level IS NULL OR (min_level >= 1 AND min_level <= 10)",
+            name="ck_min_level_range",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -243,6 +247,7 @@ class JobRequiredSkill(Base):
         default=RequirementTypeEnum.MUST_HAVE,
     )
     min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    min_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expected_capability: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Metadata

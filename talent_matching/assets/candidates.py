@@ -26,6 +26,7 @@ from dagster import (
 
 from talent_matching.db import get_session
 from talent_matching.llm import PDFEngine, embed_text, extract_pdf_from_url, normalize_cv
+from talent_matching.models.enums import PROFICIENCY_LEVELS
 from talent_matching.skills.resolver import load_alias_map, resolve_skill_name, skill_vector_key
 from talent_matching.utils.airtable_mapper import normalized_candidate_to_airtable_fields
 
@@ -359,21 +360,6 @@ def normalized_candidates(
         "model_version": result.model,
         "prompt_version": result.prompt_version,
     }
-
-
-# Proficiency level mapping (1-10 to qualitative names)
-PROFICIENCY_LEVELS = {
-    1: "Novice",
-    2: "Beginner",
-    3: "Elementary",
-    4: "Developing",
-    5: "Competent",
-    6: "Proficient",
-    7: "Advanced",
-    8: "Expert",
-    9: "Master",
-    10: "World-class",
-}
 
 
 def _get_proficiency_label(score: int) -> str:
