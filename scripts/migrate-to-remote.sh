@@ -10,14 +10,25 @@
 #
 # Usage:
 #   ./scripts/migrate-to-remote.sh <ssh_user@remote_host> [remote_project_dir]
+#   ./scripts/migrate-to-remote.sh --resume <ssh_user@remote_host> [remote_project_dir]
+#
+# Options:
+#   --resume   Skip dump and upload (steps 1-3), go straight to DB restore
+#              and stack startup. Use when files are already on the remote.
 #
 # Example:
 #   ./scripts/migrate-to-remote.sh deploy@192.168.1.100
-#   ./scripts/migrate-to-remote.sh deploy@myserver.com /opt/talent-matching
+#   ./scripts/migrate-to-remote.sh --resume deploy@myserver.com /opt/talent-matching
 
 set -euo pipefail
 
-REMOTE_HOST="${1:?Usage: $0 <ssh_user@remote_host> [remote_project_dir]}"
+RESUME=false
+if [ "${1:-}" = "--resume" ]; then
+    RESUME=true
+    shift
+fi
+
+REMOTE_HOST="${1:?Usage: $0 [--resume] <ssh_user@remote_host> [remote_project_dir]}"
 REMOTE_DIR="${2:-/opt/talent-matching}"
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,7 +45,16 @@ echo ""
 echo "  Source:  local Docker ($DB_CONTAINER)"
 echo "  Target:  $REMOTE_HOST:$REMOTE_DIR"
 echo "  DB:      $DB_NAME (user: $DB_USER)"
+if $RESUME; then
+echo "  Mode:    RESUME (skipping dump & upload)"
+fi
 echo ""
+
+if $RESUME; then
+    echo "[1/5] Skipped (--resume)"
+    echo "[2/5] Skipped (--resume)"
+    echo "[3/5] Skipped (--resume)"
+else
 
 # ── Step 1: Dump the local PostgreSQL database ──────────────────────────────
 
@@ -76,6 +96,8 @@ rsync -avz --progress \
 echo "       Transferring database dump..."
 scp "$DUMP_FILE" "$REMOTE_HOST:$REMOTE_DIR/db_dump.sql.gz"
 
+fi
+
 # ── Step 4: Set up and restore on remote ────────────────────────────────────
 
 echo "[4/5] Setting up database and restoring data on remote..."
@@ -84,24 +106,17 @@ ssh "$REMOTE_HOST" bash <<REMOTE_SCRIPT
 set -euo pipefail
 cd "$REMOTE_DIR"
 
-# Prompt for .env if it doesn't exist
 if [ ! -f .env ]; then
   echo ""
   echo "WARNING: No .env file found at $REMOTE_DIR/.env"
   echo "Copy env.example and fill in your production values:"
   echo "  cp env.example .env && nano .env"
   echo ""
-  echo "Then re-run this script, or continue the remaining steps manually:"
-  echo "  cd $REMOTE_DIR"
-  echo "  docker compose -f docker-compose.prod.yml up -d postgres"
-  echo "  # wait for postgres to be healthy, then:"
-  echo "  gunzip -c db_dump.sql.gz | docker exec -i talent_matching_db psql -U $DB_USER -d $DB_NAME"
-  echo "  docker compose -f docker-compose.prod.yml up --build -d"
+  echo "Then re-run with: $0 --resume $REMOTE_HOST $REMOTE_DIR"
   echo ""
   exit 1
 fi
 
-# Start only postgres first so we can restore
 docker compose -f docker-compose.prod.yml up -d postgres
 echo "       Waiting for PostgreSQL to become healthy..."
 until docker exec $DB_CONTAINER pg_isready -U $DB_USER -d $DB_NAME > /dev/null 2>&1; do
@@ -109,13 +124,11 @@ until docker exec $DB_CONTAINER pg_isready -U $DB_USER -d $DB_NAME > /dev/null 2
 done
 echo "       PostgreSQL is ready."
 
-# Restore the database dump
 echo "       Restoring database from dump..."
 gunzip -c db_dump.sql.gz | docker exec -i $DB_CONTAINER psql -U $DB_USER -d $DB_NAME
 
 echo "       Database restored successfully."
 
-# Clean up the dump file on the remote
 rm -f db_dump.sql.gz
 REMOTE_SCRIPT
 
@@ -141,7 +154,7 @@ echo "============================================"
 echo "  Migration complete!"
 echo "============================================"
 echo ""
-echo "  Dagster webserver: http://${REMOTE_HOST##*@}:3000"
+echo "  Connect with:  ./scripts/dagster-remote-ui.sh $REMOTE_HOST"
 echo ""
 echo "  Useful commands on the remote server:"
 echo "    ssh $REMOTE_HOST"
