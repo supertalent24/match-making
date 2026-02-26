@@ -71,6 +71,7 @@ def run_normalize(
     non_negotiables: str | None,
     nice_to_have: str | None,
     location_raw: str | None = None,
+    projected_salary: str | None = None,
 ) -> dict:
     """Normalize job via LLM."""
     openrouter = OpenRouterResource(
@@ -84,6 +85,7 @@ def run_normalize(
             non_negotiables=non_negotiables,
             nice_to_have=nice_to_have,
             location_raw=location_raw,
+            projected_salary=projected_salary,
         )
     )
     print(f"  LLM cost: ${result.cost_usd:.4f}  tokens: {result.total_tokens}")
@@ -331,6 +333,7 @@ def main():
     nice = fields.get("Nice-to-have") or None
     loc_values = fields.get("Preferred Location ", fields.get("Preferred Location", []))
     location_raw = ", ".join(loc_values) if isinstance(loc_values, list) and loc_values else None
+    projected_salary = fields.get("Projected Salary") or None
     link = fields.get("Job Description Link")
     print(f"  Title: {title}")
     print(f"  Company: {company}")
@@ -338,6 +341,8 @@ def main():
         print(f"  Job Description Link: {link[:120]}")
     if location_raw:
         print(f"  Location (raw): {location_raw[:200]}")
+    if projected_salary:
+        print(f"  Projected Salary: {projected_salary}")
     if non_neg:
         print(f"  Non-negotiables: {non_neg[:200]}")
     if nice:
@@ -349,14 +354,17 @@ def main():
     job_desc = mapped.get("job_description", "")
     print(f"  Job description: {len(job_desc)} chars")
 
-    # Use non_negotiables/nice_to_have from mapped data (may differ from raw fields)
+    # Use recruiter fields from mapped data (may differ from raw Airtable fields)
     non_neg = mapped.get("non_negotiables") or non_neg
     nice = mapped.get("nice_to_have") or nice
     location_raw = mapped.get("location_raw") or location_raw
+    projected_salary = mapped.get("projected_salary") or projected_salary
 
     # Step 3: Normalize via LLM
-    print(f"\n[3/5] Normalizing job via LLM (prompt v{PROMPT_VERSION} with location_raw)...")
-    normalized = run_normalize(job_desc, non_neg, nice, location_raw=location_raw)
+    print(f"\n[3/5] Normalizing job via LLM (prompt v{PROMPT_VERSION})...")
+    normalized = run_normalize(
+        job_desc, non_neg, nice, location_raw=location_raw, projected_salary=projected_salary
+    )
     print_normalized_skills(normalized)
 
     # Step 4: Store normalized job

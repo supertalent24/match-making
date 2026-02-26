@@ -123,7 +123,7 @@ def _is_notion_url(url: str) -> bool:
     group_name="jobs",
     io_manager_key="postgres_io",
     required_resource_keys={"openrouter"},
-    code_version="2.2.0",  # v2.2: pass location_raw to LLM for timezone inference
+    code_version="2.3.0",  # v2.3: pass projected_salary to LLM for compensation extraction
     metadata={
         "table": "normalized_jobs",
         "llm_operation": "normalize_job",
@@ -152,6 +152,7 @@ def normalized_jobs(
     non_negotiables = (raw_jobs.get("non_negotiables") or "").strip() or None
     nice_to_have = (raw_jobs.get("nice_to_have") or "").strip() or None
     location_raw = (raw_jobs.get("location_raw") or "").strip() or None
+    projected_salary = (raw_jobs.get("projected_salary") or "").strip() or None
 
     openrouter = context.resources.openrouter
     result = asyncio.run(
@@ -161,6 +162,7 @@ def normalized_jobs(
             non_negotiables=non_negotiables,
             nice_to_have=nice_to_have,
             location_raw=location_raw,
+            projected_salary=projected_salary,
         )
     )
     data = result.data

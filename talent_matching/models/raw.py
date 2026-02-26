@@ -143,6 +143,7 @@ class RawJob(Base):
     # ═══════════════════════════════════════════════════════════════════
     non_negotiables: Mapped[str | None] = mapped_column(Text, nullable=True)
     nice_to_have: Mapped[str | None] = mapped_column(Text, nullable=True)
+    projected_salary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Timestamps
     ingested_at: Mapped[datetime] = mapped_column(

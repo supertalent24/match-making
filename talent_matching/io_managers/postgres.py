@@ -932,6 +932,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             "x_url": _serialize_for_text(data.get("x_url")),
             "non_negotiables": _serialize_for_text(data.get("non_negotiables")),
             "nice_to_have": _serialize_for_text(data.get("nice_to_have")),
+            "projected_salary": _serialize_for_text(data.get("projected_salary")),
             "processing_status": ProcessingStatusEnum.PENDING,
         }
 

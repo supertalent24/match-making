@@ -88,6 +88,7 @@ def _map_ats_record_to_raw_job(record: dict) -> dict:
         "x_url": None,
         "non_negotiables": fields.get("Non Negotiables") or None,
         "nice_to_have": fields.get("Nice-to-have") or None,
+        "projected_salary": fields.get("Projected Salary") or None,
     }
 
 
@@ -125,6 +126,7 @@ def _ingest_raw_job(record: dict, notion_resource: object | None, log: object) -
         x_url=mapped.get("x_url"),
         non_negotiables=mapped.get("non_negotiables"),
         nice_to_have=mapped.get("nice_to_have"),
+        projected_salary=mapped.get("projected_salary"),
         processing_status=ProcessingStatusEnum.PENDING,
     )
     stmt = stmt.on_conflict_do_update(
@@ -141,6 +143,7 @@ def _ingest_raw_job(record: dict, notion_resource: object | None, log: object) -
             "job_category_raw": mapped.get("job_category_raw"),
             "non_negotiables": mapped.get("non_negotiables"),
             "nice_to_have": mapped.get("nice_to_have"),
+            "projected_salary": mapped.get("projected_salary"),
             "processing_status": ProcessingStatusEnum.PENDING,
         },
     )

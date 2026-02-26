@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = "3.3.0"  # v3.3.0: Pass location_raw to help infer timezone_requirements
+PROMPT_VERSION = "3.4.0"  # v3.4.0: Pass projected_salary for compensation extraction
 
 # Default model for job normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -136,10 +136,12 @@ def _build_user_prompt(
     non_negotiables: str | None = None,
     nice_to_have: str | None = None,
     location_raw: str | None = None,
+    projected_salary: str | None = None,
 ) -> str:
     parts = [f"Parse this job description:\n\n{raw_job_text}"]
 
-    if non_negotiables or nice_to_have or location_raw:
+    recruiter_fields = [non_negotiables, nice_to_have, location_raw, projected_salary]
+    if any(recruiter_fields):
         parts.append(
             "\n\n--- RECRUITER GUIDANCE ---\n"
             "The recruiter has provided additional context below. Use it to "
@@ -157,6 +159,12 @@ def _build_user_prompt(
                 "Use this to infer timezone_requirements as a UTC offset range "
                 "covering these regions."
             )
+        if projected_salary:
+            parts.append(
+                f"\n**Projected salary range:**\n{projected_salary}\n"
+                "Use this for the compensation.salary_min and compensation.salary_max "
+                "fields. Parse the range into numeric yearly values."
+            )
 
     return "\n".join(parts)
 
@@ -168,6 +176,7 @@ async def normalize_job(
     non_negotiables: str | None = None,
     nice_to_have: str | None = None,
     location_raw: str | None = None,
+    projected_salary: str | None = None,
 ) -> NormalizeJobResult:
     """Normalize a job description into structured format using LLM.
 
@@ -177,12 +186,15 @@ async def normalize_job(
         non_negotiables: Recruiter-provided hard requirements (free text)
         nice_to_have: Recruiter-provided nice-to-have preferences (free text)
         location_raw: Recruiter-specified preferred locations (e.g. "Singapore, Europe")
+        projected_salary: Recruiter-specified salary range (e.g. "$120,000 - $170,000")
 
     Returns:
         NormalizeJobResult with data, usage stats, and model for metadata
     """
     model = DEFAULT_MODEL
-    user_prompt = _build_user_prompt(raw_job_text, non_negotiables, nice_to_have, location_raw)
+    user_prompt = _build_user_prompt(
+        raw_job_text, non_negotiables, nice_to_have, location_raw, projected_salary
+    )
     response = await openrouter.complete(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
