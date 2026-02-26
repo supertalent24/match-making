@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from dagster import (
+    DefaultSensorStatus,
     RunRequest,
     SensorEvaluationContext,
     SkipReason,
@@ -167,6 +168,7 @@ def _ingest_raw_job(record: dict, notion_resource: object | None, log: object) -
         "normalization + matchmaking."
     ),
     required_resource_keys={"airtable_ats", "notion"},
+    default_status=DefaultSensorStatus.RUNNING,
 )
 def ats_matchmaking_sensor(context: SensorEvaluationContext):
     """Detect ATS jobs ready for matchmaking and trigger the full pipeline.

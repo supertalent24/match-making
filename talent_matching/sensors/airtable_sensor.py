@@ -8,6 +8,7 @@ import json
 from datetime import UTC, datetime
 
 from dagster import (
+    DefaultSensorStatus,
     RunRequest,
     SensorEvaluationContext,
     SkipReason,
@@ -23,6 +24,7 @@ from talent_matching.jobs import candidate_pipeline_job
     minimum_interval_seconds=900,  # Check every 15 minutes (Airtable API is slow ~20s per full poll)
     description="Polls Airtable for new or updated candidate records using incremental sync",
     required_resource_keys={"airtable"},
+    default_status=DefaultSensorStatus.RUNNING,
 )
 def airtable_candidate_sensor(context: SensorEvaluationContext):
     """Detect new and updated candidates in Airtable using cursor-based sync.
