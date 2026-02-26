@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
 PROMPT_VERSION = (
-    "3.0.0"  # v3.0.0: Add min_years and min_level per skill; canonical proficiency scale
+    "3.1.0"  # v3.1.0: Separate domain requirements from technical skills in skill lists
 )
 
 # Default model for job normalization (cost-effective for extraction)
@@ -86,7 +86,7 @@ Be factual. If information is not mentioned, use null.
 
 **Seniority:** Use the same levels as candidate profiles (uppercase): JUNIOR, MID, SENIOR, STAFF (IC track), LEAD (management track), PRINCIPAL, EXECUTIVE.
 
-**Skills:** Use canonical skill names so they match candidate skill lists: e.g. "React" not "ReactJS", "TypeScript" not "TS", "PostgreSQL" not "Postgres". For each required skill, output an object with "name", "min_years", "min_level", and "expected_capability".
+**Skills:** Only include concrete, matchable **technical skills** in must_have_skills and nice_to_have_skills: programming languages, frameworks, libraries, tools, platforms, databases, protocols, and methodologies (e.g. "React", "TypeScript", "PostgreSQL", "GraphQL", "CI/CD", "System Design"). Do NOT include domain/vertical requirements (e.g. "Financial Interfaces", "Healthcare domain", "E-commerce experience", "Trading Dashboards") as skills -- instead weave domain requirements into the role_description and domain narrative where they are matched semantically against candidate profiles. Use canonical skill names so they match candidate skill lists: e.g. "React" not "ReactJS", "TypeScript" not "TS", "PostgreSQL" not "Postgres". For each required skill, output an object with "name", "min_years", "min_level", and "expected_capability".
 
 - **min_years** (int or null): minimum years of experience with this specific skill. Extract from phrases like "5+ years of React", "at least 3 years". Use null when no years requirement is stated or implied for this skill. Do NOT confuse overall years_of_experience_min with per-skill min_years.
 - **min_level** (int 1-10 or null): minimum proficiency level expected. Use the following scale (same as candidate ratings): {proficiency_scale}. Infer from context: "production experience" suggests 7-8 (Advanced/Expert), "deep expertise" or "architect-level" suggests 9+ (Master), "familiarity" or "exposure" suggests 3-4 (Elementary/Developing). Use null when proficiency level is not implied.
