@@ -12,7 +12,7 @@ Environment=DAGSTER_HOME=/root/match-making
 Environment=POSTGRES_HOST=127.0.0.1
 Environment=ENVIRONMENT=production
 
-ExecStart=/root/.local/bin/poetry run dagster-daemon run
+ExecStart=/root/match-making/.venv/bin/dagster-daemon run
 
 Restart=on-failure
 RestartSec=5

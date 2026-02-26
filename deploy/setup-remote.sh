@@ -29,6 +29,14 @@ echo ""
 echo "[1/6] Installing system dependencies..."
 
 apt-get update -qq
+apt-get install -y -qq software-properties-common > /dev/null
+
+if ! apt-cache show python3.13 &> /dev/null; then
+    echo "       Adding deadsnakes PPA for Python 3.13..."
+    add-apt-repository -y ppa:deadsnakes/ppa > /dev/null 2>&1
+    apt-get update -qq
+fi
+
 apt-get install -y -qq python3.13 python3.13-venv python3.13-dev \
     libpq-dev gcc curl > /dev/null
 
@@ -40,6 +48,7 @@ fi
 export PATH="/root/.local/bin:$PATH"
 
 poetry config virtualenvs.in-project true
+poetry env use python3.13
 
 # ── 2. Python dependencies ──────────────────────────────────────────────────
 

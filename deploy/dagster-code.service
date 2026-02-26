@@ -12,8 +12,8 @@ Environment=DAGSTER_HOME=/root/match-making
 Environment=POSTGRES_HOST=127.0.0.1
 Environment=ENVIRONMENT=production
 
-ExecStartPre=/root/.local/bin/poetry run alembic upgrade head
-ExecStart=/root/.local/bin/poetry run dagster api grpc -h 127.0.0.1 -p 4266 -m talent_matching.definitions
+ExecStartPre=/root/match-making/.venv/bin/alembic upgrade head
+ExecStart=/root/match-making/.venv/bin/dagster api grpc -h 127.0.0.1 -p 4266 -m talent_matching.definitions
 
 Restart=on-failure
 RestartSec=5
