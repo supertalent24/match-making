@@ -92,15 +92,29 @@ def _location_score(
         return 0.5 * weight
 
     def parse_tz(s):
-        s = str(s).strip().upper().replace(" ", "")
-        if s.startswith("UTC"):
-            rest = s[3:].strip()
+        stripped = str(s).strip()
+        upper = stripped.upper().replace(" ", "")
+        if upper.startswith(("UTC", "GMT")):
+            rest = upper[3:].strip()
             if not rest or rest == "0":
                 return 0.0
             sign = 1 if rest.startswith("+") else -1
-            num = rest.lstrip("+-").split("/")[0].split("-")[0].split("+")[0]
+            rest = rest.lstrip("+-")
+            if ":" in rest:
+                parts = rest.split(":")
+                if parts[0].isdigit() and parts[1].isdigit():
+                    return sign * (int(parts[0]) + int(parts[1]) / 60)
+            num = rest.split("/")[0].split("-")[0].split("+")[0]
             if num.isdigit():
                 return sign * float(num)
+            return None
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        zi = ZoneInfo(stripped)
+        offset = datetime.now(zi).utcoffset()
+        if offset is not None:
+            return offset.total_seconds() / 3600
         return None
 
     c_tz = parse_tz(candidate_timezone)
