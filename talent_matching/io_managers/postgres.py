@@ -37,6 +37,7 @@ from talent_matching.models.enums import (
     SeniorityEnum,
 )
 from talent_matching.models.jobs import JobRequiredSkill
+from talent_matching.services.timezone_resolver import resolve_candidate_timezone
 from talent_matching.skills.resolver import get_or_create_skill
 
 
@@ -447,6 +448,9 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             location_country = str(location) if location else None
             location_region = None
             timezone = None
+
+        # Inline timezone resolution: cache lookup -> LLM fallback -> null
+        timezone = resolve_candidate_timezone(session, location_city, location_country, timezone)
 
         # Extract social handles from LLM response
         social_handles = normalized_json.get("social_handles", {})
