@@ -64,30 +64,26 @@ schedule_storage:
       db_name:
         env: POSTGRES_DB
 
-# Local compute for now (can be upgraded to Kubernetes later)
 run_launcher:
   module: dagster.core.launcher
   class: DefaultRunLauncher
 
-# Concurrency configuration (unified in newer Dagster versions)
-# - runs.max_concurrent_runs: max backfill/queued runs executing simultaneously
+# Queue runs so we can cap concurrency (dagster 1.6.x format)
 #   Connection budget (PostgreSQL max_connections=300):
 #     Both app (talent_matching.db) and Dagster storage use NullPool — connections
 #     are transient but overlap across many concurrent subprocesses.
 #     Observed: ~6-8 transient connections per run (Dagster event log writes, run
 #     status updates, app DB ops). 20 runs × 8 = 160 peak, plus ~30 overhead = 190.
 #   Also bounded by 16 GB RAM: each run subprocess uses ~100-200 MB.
-# - pools.default_limit: max concurrent ops per concurrency key (airtable_api, openrouter_api)
-concurrency:
-  runs:
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
     max_concurrent_runs: 20
-    # Only one matchmaking partition at a time (job or sensor) to avoid overloading the machine
     tag_concurrency_limits:
       - key: "dagster/concurrency_limit"
         value: "matchmaking"
         limit: 1
-  pools:
-    default_limit: 50
 
 # Telemetry (disabled for privacy)
 telemetry:
