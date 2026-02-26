@@ -1008,6 +1008,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             "has_equity": comp.get("equity"),
             "location_type": _parse_location_type(loc.get("type")),
             "locations": loc.get("locations"),
+            "timezone_requirements": loc.get("timezone_requirements"),
             "employment_type": _parse_employment_types(data.get("employment_type")),
             "min_leadership_score": _min_soft("leadership"),
             "min_autonomy_score": _min_soft("autonomy"),

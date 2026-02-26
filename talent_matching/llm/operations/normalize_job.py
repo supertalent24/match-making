@@ -18,9 +18,7 @@ if TYPE_CHECKING:
 # - MAJOR: Breaking changes to output schema
 # - MINOR: New fields or significant prompt improvements
 # - PATCH: Minor wording tweaks or bug fixes
-PROMPT_VERSION = (
-    "3.1.0"  # v3.1.0: Separate domain requirements from technical skills in skill lists
-)
+PROMPT_VERSION = "3.2.0"  # v3.2.0: Add timezone_requirements to location schema
 
 # Default model for job normalization (cost-effective for extraction)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -65,7 +63,8 @@ Output a single JSON object with this structure (use null when not mentioned):
   },
   "location": {
     "type": "remote|hybrid|onsite",
-    "locations": ["Locations if onsite/hybrid..."]
+    "locations": ["Locations if onsite/hybrid..."],
+    "timezone_requirements": "UTC offset range e.g. 'UTC-5 to UTC+1', single offset, or null"
   },
   "responsibilities": ["Bullet or sentence per responsibility"],
   "nice_to_haves": ["Optional bullets"],
@@ -97,6 +96,8 @@ Apply to must_have_skills and nice_to_have_skills. tech_stack remains a simple a
 **Soft attribute requirements:** Infer minimum 1-5 scores from job description signals (e.g. "lead small team" -> leadership 3; "self-directed" -> autonomy 4). Use the same five dimensions as candidate profiles: leadership, autonomy, technical_depth, communication, growth_trajectory. Use null when not implied.
 
 **Compensation:** Always normalize to yearly amounts for salary_min and salary_max. If the posting states hourly, daily, or monthly rates, convert to yearly (e.g. hourly × 2080 for full-time, × 1040 for half-time; monthly × 12). Keep the stated currency. Use null only when no numeric compensation is given.
+
+**Timezone requirements:** Extract timezone constraints from phrases like "US time zones", "European hours", "EST to CET overlap". Convert named timezones to UTC offset ranges (e.g. "US time zones" -> "UTC-10 to UTC-5", "European hours" -> "UTC+0 to UTC+3"). Use null when no timezone constraint is mentioned. For remote roles, infer from context if possible (e.g. company HQ location, meeting overlap requirements).
 
 **Job title:** Use English. If the posting is in another language (e.g. German "Frontend-Entwickler"), output the English equivalent (e.g. "Frontend Developer")."""
 
