@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "openai/gpt-4o-mini"
+DEFAULT_MODEL = "openai/gpt-4o"
 MAX_OUTPUT_TOKENS = 16_384
 
 MAX_BATCH_SIZE = 400
@@ -145,6 +145,26 @@ def _build_assign_prompt(existing_bags: list[dict[str, Any]], unprocessed_names:
     names_text = json.dumps(unprocessed_names)
     return f"""We have existing **alias bags** (each bag has one canonical skill name and a list of equivalent aliases). Below are **new skill names** that are not yet in any bag. For each new name, assign it to the canonical of an existing bag if it means the same thing (e.g. "Typescript" → TypeScript, "ReactJS" → React). If no existing bag fits, put the name in new_groups. Use only canonicals from the existing bags; do not invent names.
 
+**CRITICAL — "same skill" means the EXACT SAME technology, not merely related or similarly named:**
+- Only aliases: alternate spellings, capitalizations, abbreviations, or widely accepted synonyms for the identical tool/language/framework.
+- CORRECT merges: "Typescript" → TypeScript, "ReactJS" → React, "Golang" → Go, "Node" → Node.js, "Postgres" → PostgreSQL, "K8s" → Kubernetes, "JS" → JavaScript.
+- WRONG merges (these are DISTINCT skills — NEVER group together):
+  • Java ≠ JavaScript (different languages, different runtimes, different ecosystems)
+  • C ≠ C++ ≠ C# (three separate languages)
+  • React ≠ React Native (web framework vs mobile framework)
+  • AWS ≠ GCP ≠ Azure (competing cloud platforms)
+  • REST ≠ GraphQL ≠ gRPC (different API paradigms)
+  • SQL ≠ PostgreSQL ≠ MySQL ≠ SQLite (SQL is a language; the others are specific databases)
+  • Docker ≠ Kubernetes (containerization vs orchestration)
+  • Terraform ≠ Ansible ≠ Pulumi (different IaC tools)
+  • Redis ≠ Memcached (different caching systems)
+  • Solidity ≠ Rust ≠ Move (different smart-contract / systems languages)
+  • Next.js ≠ Nuxt.js (React-based vs Vue-based)
+  • Express ≠ Fastify ≠ NestJS (different Node.js frameworks)
+  • Sass ≠ CSS ≠ Tailwind CSS (different styling approaches)
+
+When in doubt, do NOT merge — put the name in new_groups instead. A false non-merge is harmless; a false merge corrupts matching data.
+
 Existing bags:
 {bags_text}
 
@@ -174,7 +194,7 @@ async def assign_skills_to_bags(
         openrouter: OpenRouter resource for API calls.
         existing_bags: List of { "canonical": str, "aliases": list[str] }.
         unprocessed_names: List of skill names not yet in any bag.
-        model: Model to use; defaults to gpt-4o-mini.
+        model: Model to use; defaults to gpt-4o.
         dagster_log: Optional Dagster logger for error diagnostics.
 
     Returns:
@@ -223,7 +243,26 @@ Return valid JSON only with exactly one key:
 Rules:
 - Every skill name must appear exactly once across all clusters (either as canonical or as alias).
 - Do not invent names; use only names from the list above.
-- Only group names that genuinely mean the same skill (e.g. "Node" and "Node.js" are the same; "Node" and "Angular" are not)."""
+- "Equivalent" means the EXACT SAME technology under a different spelling, abbreviation, or common nickname. Two skills are equivalent ONLY if a developer listing one on their CV would always mean the other.
+- CORRECT clusters (genuinely the same thing):
+  • "Node", "Node.js", "NodeJS" → canonical "Node.js"
+  • "Typescript", "TS" → canonical "TypeScript"
+  • "Postgres", "PostgreSQL" → canonical "PostgreSQL"
+  • "K8s", "Kubernetes" → canonical "Kubernetes"
+  • "Golang", "Go lang" → canonical "Go"
+- WRONG clusters (these are DISTINCT skills — keep them as separate singletons):
+  • Java ≠ JavaScript (completely different languages)
+  • C ≠ C++ ≠ C# (three separate languages)
+  • React ≠ React Native (web vs mobile)
+  • SQL ≠ PostgreSQL ≠ MySQL (language vs specific databases)
+  • Docker ≠ Kubernetes (containerization vs orchestration)
+  • REST ≠ GraphQL (different API paradigms)
+  • Next.js ≠ Nuxt.js (React-based vs Vue-based)
+  • Sass ≠ CSS ≠ Tailwind CSS (different styling approaches)
+  • Terraform ≠ Pulumi ≠ Ansible (different IaC tools)
+  • Solidity ≠ Rust ≠ Move (different languages)
+
+When in doubt, keep skills as separate singletons. A false separation is harmless; a false merge corrupts matching data permanently."""
 
 
 async def cluster_new_skills(
@@ -240,7 +279,7 @@ async def cluster_new_skills(
     Args:
         openrouter: OpenRouter resource for API calls.
         skill_names: Unmatched skill names (new_groups from assign_skills_to_bags).
-        model: Model to use; defaults to gpt-4o-mini.
+        model: Model to use; defaults to gpt-4o.
         dagster_log: Optional Dagster logger for error diagnostics.
 
     Returns:
