@@ -998,7 +998,7 @@ class PostgresMetricsIOManager(ConfigurableIOManager):
             "raw_job_id": raw_job.id,
             "job_title": data.get("title") or data.get("job_title", "Unknown"),
             "job_category": data.get("job_category"),
-            "company_name": data.get("company_name", "Unknown"),
+            "company_name": data.get("company_name") or raw_job.company_name or "Unknown",
             "job_description": data.get("job_description"),
             "role_summary": data.get("role_description") or data.get("role_summary"),
             "responsibilities": data.get("responsibilities"),
