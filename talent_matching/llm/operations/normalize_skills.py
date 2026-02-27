@@ -163,6 +163,18 @@ def _build_assign_prompt(existing_bags: list[dict[str, Any]], unprocessed_names:
   • Express ≠ Fastify ≠ NestJS (different Node.js frameworks)
   • Sass ≠ CSS ≠ Tailwind CSS (different styling approaches)
 
+**NEVER merge a specific tool/framework into a broad category.** A canonical like "Frontend", "Backend Development", "DevOps", "AI", "Blockchain", "Programming", "Design", "Testing", "Operations", "Data Analysis", "Cloud Computing", or "API Design" is NOT a valid alias target for concrete technologies. Examples of WRONG category merges:
+  • React → "Frontend" (React is a specific framework, not a synonym for Frontend)
+  • Django → "Backend Development" (Django is a specific framework)
+  • Docker → "DevOps" (Docker is a specific tool)
+  • TensorFlow → "AI" (TensorFlow is a specific library)
+  • Solidity → "Blockchain" (Solidity is a specific language)
+  • GraphQL → "API Design" (GraphQL is a specific technology)
+  • Jest → "Testing" (Jest is a specific tool)
+  • Figma → "Design" (Figma is a specific product)
+  • Rust → "Programming" (Rust is a specific language)
+  • Pandas → "Data Analysis" (Pandas is a specific library)
+
 When in doubt, do NOT merge — put the name in new_groups instead. A false non-merge is harmless; a false merge corrupts matching data.
 
 Existing bags:
@@ -261,6 +273,12 @@ Rules:
   • Sass ≠ CSS ≠ Tailwind CSS (different styling approaches)
   • Terraform ≠ Pulumi ≠ Ansible (different IaC tools)
   • Solidity ≠ Rust ≠ Move (different languages)
+
+**NEVER create category clusters.** Each cluster must represent ONE specific technology, not a category. A canonical name like "Frontend", "Backend", "DevOps", "AI", "Blockchain", "Programming", "Design", "Testing", "Operations", or "Data Analysis" is NOT a valid canonical for grouping specific tools. Examples of WRONG clusters:
+  • {{"canonical": "Frontend", "aliases": ["React", "Angular", "Vue"]}} — these are three different frameworks
+  • {{"canonical": "DevOps", "aliases": ["Docker", "Kubernetes", "Ansible"]}} — these are three different tools
+  • {{"canonical": "AI", "aliases": ["PyTorch", "TensorFlow", "Machine Learning"]}} — these are distinct technologies
+  • {{"canonical": "Programming", "aliases": ["Rust", "Dart", "Elixir"]}} — these are different languages
 
 When in doubt, keep skills as separate singletons. A false separation is harmless; a false merge corrupts matching data permanently."""
 
