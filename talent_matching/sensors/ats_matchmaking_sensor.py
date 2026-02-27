@@ -229,6 +229,7 @@ def ats_matchmaking_sensor(context: SensorEvaluationContext):
         yield RunRequest(
             run_key=f"ats-matchmaking-{record_id}-{now_iso}",
             partition_key=record_id,
+            tags={"dagster/priority": "10"},
         )
 
     # Prune triggered entries whose status is no longer "Matchmaking Ready"
