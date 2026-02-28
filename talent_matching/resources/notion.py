@@ -62,6 +62,66 @@ def _block_to_text(block: dict[str, Any]) -> str:
     return plain + "\n"
 
 
+def _extract_site_origin(url: str) -> str | None:
+    """Extract the origin (scheme + host) from a notion.site URL.
+
+    Returns e.g. ``https://cliff-indigo-30c3.notion.site`` or ``None``
+    if the URL is not a notion.site page.
+    """
+    match = re.match(r"(https?://[^/]*notion\.site)", url, re.I)
+    return match.group(1) if match else None
+
+
+def _format_page_id_with_dashes(raw_id: str) -> str:
+    """Convert a 32-char hex page ID to the dashed UUID format Notion expects."""
+    h = raw_id.replace("-", "")
+    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
+
+
+def _fetch_public_page_content(page_url: str, page_id: str) -> str | None:
+    """Fetch content from a publicly-published Notion page via the internal API.
+
+    Works for pages published to ``*.notion.site`` without requiring the page
+    to be shared with a Notion integration.
+    """
+    origin = _extract_site_origin(page_url)
+    if not origin:
+        return None
+
+    dashed_id = _format_page_id_with_dashes(page_id)
+    endpoint = f"{origin}/api/v3/loadPageChunk"
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                endpoint,
+                json={
+                    "page": {"id": dashed_id},
+                    "limit": 100,
+                    "cursor": {"stack": []},
+                    "chunkNumber": 0,
+                    "verticalColumns": False,
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        logger.warning("Public Notion fetch failed for %s: %s", page_id, exc)
+        return None
+
+    blocks = data.get("recordMap", {}).get("block", {})
+    texts: list[str] = []
+    for block_data in blocks.values():
+        value = block_data.get("value", {})
+        title_parts = value.get("properties", {}).get("title", [])
+        for part in title_parts:
+            if isinstance(part, list) and part and isinstance(part[0], str):
+                texts.append(part[0])
+
+    return "\n".join(texts).strip() or None
+
+
 class NotionResource(ConfigurableResource):
     """Notion API resource for fetching page content as text.
 
@@ -84,7 +144,11 @@ class NotionResource(ConfigurableResource):
         return headers
 
     def fetch_page_content(self, page_url: str) -> str | None:
-        """Fetch a Notion page's content and return it as plain text (with minimal structure).
+        """Fetch a Notion page's content and return it as plain text.
+
+        Tries the official Notion API first.  If the page is not shared with
+        the integration (404), falls back to the public ``notion.site``
+        internal API for pages that are published to the web.
 
         Args:
             page_url: Full Notion page URL (notion.so or notion.site).
@@ -117,7 +181,11 @@ class NotionResource(ConfigurableResource):
                     if not next_cursor:
                         break
         except httpx.HTTPStatusError as exc:
-            logger.warning("Notion API error for page %s: %s", page_id, exc.response.status_code)
-            return None
+            logger.warning(
+                "Notion API error for page %s (%s), trying public fallback",
+                page_id,
+                exc.response.status_code,
+            )
+            return _fetch_public_page_content(page_url, page_id)
 
         return "".join(all_text).strip() or None
