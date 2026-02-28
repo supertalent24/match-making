@@ -4,12 +4,15 @@ Used by the job pipeline to resolve job description text from Notion page URLs
 (e.g. when Airtable row contains only a link to a Notion job description).
 """
 
+import logging
 import re
 from typing import Any
 
 import httpx
 from dagster import ConfigurableResource
 from pydantic import Field
+
+logger = logging.getLogger(__name__)
 
 
 def extract_notion_page_id(url: str) -> str | None:
@@ -96,21 +99,25 @@ class NotionResource(ConfigurableResource):
         all_text: list[str] = []
         next_cursor: str | None = None
 
-        with httpx.Client(timeout=30.0) as client:
-            while True:
-                url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-                params: dict[str, Any] = {"page_size": 100}
-                if next_cursor:
-                    params["start_cursor"] = next_cursor
-                response = client.get(url, headers=self._headers(), params=params)
-                response.raise_for_status()
-                data = response.json()
-                for block in data.get("results", []):
-                    line = _block_to_text(block)
-                    if line:
-                        all_text.append(line)
-                next_cursor = data.get("next_cursor")
-                if not next_cursor:
-                    break
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                while True:
+                    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+                    params: dict[str, Any] = {"page_size": 100}
+                    if next_cursor:
+                        params["start_cursor"] = next_cursor
+                    response = client.get(url, headers=self._headers(), params=params)
+                    response.raise_for_status()
+                    data = response.json()
+                    for block in data.get("results", []):
+                        line = _block_to_text(block)
+                        if line:
+                            all_text.append(line)
+                    next_cursor = data.get("next_cursor")
+                    if not next_cursor:
+                        break
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Notion API error for page %s: %s", page_id, exc.response.status_code)
+            return None
 
         return "".join(all_text).strip() or None
